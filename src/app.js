@@ -1,11 +1,9 @@
 const express = require('express');
-const path = require('path');
-const store = require('./src/store');
-const { buildSchedule } = require('./src/scheduler');
+const store = require('./store');
+const { buildSchedule } = require('./scheduler');
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
 const VALID_DAYS = [0, 1, 2, 3, 4, 5, 6];
 
@@ -114,73 +112,81 @@ function getScheduleResult(carpool) {
   return buildSchedule(normalizeMembers(carpool.members), upcoming, carpool.dateOverrides || {}, normalizeActivityTimes(carpool.activityTimes));
 }
 
-app.post('/api/carpools', (req, res) => {
+app.post('/api/carpools', async (req, res) => {
   const { carpoolName } = req.body;
   const { errors, name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children } = validateMemberInput(req.body);
   if (errors.length) return res.status(400).json({ errors });
 
   try {
-    const carpool = store.createCarpool(carpoolName);
-    const member = store.addMember(carpool.code, { name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children });
-    store.setOwner(carpool.code, member.id);
-    res.status(201).json({ carpool: serializeCarpool(store.getCarpool(carpool.code)), member });
+    const carpool = await store.createCarpool(carpoolName);
+    const member = await store.addMember(carpool.code, { name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children });
+    await store.setOwner(carpool.code, member.id);
+    res.status(201).json({ carpool: serializeCarpool(await store.getCarpool(carpool.code)), member });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.get('/api/carpools/:code', (req, res) => {
-  const carpool = store.getCarpool(req.params.code);
-  if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
-  res.json(serializeCarpool(carpool));
+app.get('/api/carpools/:code', async (req, res) => {
+  try {
+    const carpool = await store.getCarpool(req.params.code);
+    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
+    res.json(serializeCarpool(carpool));
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
 });
 
-app.post('/api/carpools/:code/members', (req, res) => {
+app.post('/api/carpools/:code/members', async (req, res) => {
   const { errors, name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children } = validateMemberInput(req.body);
   if (errors.length) return res.status(400).json({ errors });
 
   try {
-    const member = store.addMember(req.params.code, { name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children });
+    const member = await store.addMember(req.params.code, { name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children });
     res.status(201).json({ member });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.delete('/api/carpools/:code/members/:memberId', (req, res) => {
-  const carpool = store.getCarpool(req.params.code);
-  if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
+app.delete('/api/carpools/:code/members/:memberId', async (req, res) => {
+  try {
+    const carpool = await store.getCarpool(req.params.code);
+    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
 
-  const { requesterId } = req.body;
-  if (requesterId !== req.params.memberId) {
-    return res.status(403).json({ errors: ['You can only remove yourself'] });
+    const { requesterId } = req.body;
+    if (requesterId !== req.params.memberId) {
+      return res.status(403).json({ errors: ['You can only remove yourself'] });
+    }
+
+    const updated = await store.removeMember(req.params.code, req.params.memberId);
+    if (!updated) return res.json({ deleted: true });
+    res.json(serializeCarpool(updated));
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
   }
-
-  const updated = store.removeMember(req.params.code, req.params.memberId);
-  if (!updated) return res.json({ deleted: true });
-  res.json(serializeCarpool(updated));
 });
 
-app.post('/api/carpools/:code/members/:memberId/children', (req, res) => {
+app.post('/api/carpools/:code/members/:memberId/children', async (req, res) => {
   const { requesterId, firstName, lastNameOverride, needsRideThereDays, needsRideBackDays } = req.body;
   const first = String(firstName || '').trim();
   if (!first) return res.status(400).json({ errors: ['First name is required'] });
 
   try {
-    const child = store.addChild(req.params.code, req.params.memberId, requesterId, {
+    const child = await store.addChild(req.params.code, req.params.memberId, requesterId, {
       firstName: first,
       lastNameOverride: lastNameOverride ? String(lastNameOverride).trim() : '',
       needsRideThereDays: parseDays(needsRideThereDays),
       needsRideBackDays: parseDays(needsRideBackDays),
     });
-    const carpool = store.getCarpool(req.params.code);
+    const carpool = await store.getCarpool(req.params.code);
     res.status(201).json({ child, carpool: serializeCarpool(carpool) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.patch('/api/carpools/:code/members/:memberId/children/:childId', (req, res) => {
+app.patch('/api/carpools/:code/members/:memberId/children/:childId', async (req, res) => {
   const { requesterId, firstName, lastNameOverride, needsRideThereDays, needsRideBackDays } = req.body;
 
   try {
@@ -190,20 +196,20 @@ app.patch('/api/carpools/:code/members/:memberId/children/:childId', (req, res) 
     if (needsRideThereDays !== undefined) updates.needsRideThereDays = parseDays(needsRideThereDays);
     if (needsRideBackDays !== undefined) updates.needsRideBackDays = parseDays(needsRideBackDays);
 
-    store.updateChild(req.params.code, req.params.memberId, requesterId, req.params.childId, updates);
-    const carpool = store.getCarpool(req.params.code);
+    await store.updateChild(req.params.code, req.params.memberId, requesterId, req.params.childId, updates);
+    const carpool = await store.getCarpool(req.params.code);
     res.json({ carpool: serializeCarpool(carpool), schedule: getScheduleResult(carpool) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.delete('/api/carpools/:code/members/:memberId/children/:childId', (req, res) => {
+app.delete('/api/carpools/:code/members/:memberId/children/:childId', async (req, res) => {
   const { requesterId } = req.body;
 
   try {
-    store.removeChild(req.params.code, req.params.memberId, requesterId, req.params.childId);
-    const carpool = store.getCarpool(req.params.code);
+    await store.removeChild(req.params.code, req.params.memberId, requesterId, req.params.childId);
+    const carpool = await store.getCarpool(req.params.code);
     res.json({ carpool: serializeCarpool(carpool), schedule: getScheduleResult(carpool) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
@@ -232,59 +238,64 @@ function isValidActivityTimes(times) {
   return true;
 }
 
-app.put('/api/carpools/:code/activity-dates', (req, res) => {
-  const carpool = store.getCarpool(req.params.code);
-  if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
+app.put('/api/carpools/:code/activity-dates', async (req, res) => {
+  try {
+    const carpool = await store.getCarpool(req.params.code);
+    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
 
-  const { requesterId, dates, times, recurrence } = req.body;
-  if (requesterId !== getEffectiveOwnerId(carpool)) {
-    return res.status(403).json({ errors: ['Only the owner can edit activity dates'] });
-  }
-  if (!Array.isArray(dates) || !dates.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))) {
-    return res.status(400).json({ errors: ['dates must be an array of YYYY-MM-DD strings'] });
-  }
-  if (!isValidActivityTimes(times)) {
-    return res.status(400).json({ errors: ['times must be a {uniform, perWeekday, perDate} object of there/back HH:MM strings'] });
-  }
-  if (recurrence !== undefined && recurrence !== null) {
-    if (typeof recurrence !== 'object' || !Array.isArray(recurrence.weekdays) || typeof recurrence.startDate !== 'string') {
-      return res.status(400).json({ errors: ['recurrence must be {weekdays, startDate, endDate}'] });
+    const { requesterId, dates, times, recurrence } = req.body;
+    if (requesterId !== getEffectiveOwnerId(carpool)) {
+      return res.status(403).json({ errors: ['Only the owner can edit activity dates'] });
     }
-  }
+    if (!Array.isArray(dates) || !dates.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))) {
+      return res.status(400).json({ errors: ['dates must be an array of YYYY-MM-DD strings'] });
+    }
+    if (!isValidActivityTimes(times)) {
+      return res.status(400).json({ errors: ['times must be a {uniform, perWeekday, perDate} object of there/back HH:MM strings'] });
+    }
+    if (recurrence !== undefined && recurrence !== null) {
+      if (typeof recurrence !== 'object' || !Array.isArray(recurrence.weekdays) || typeof recurrence.startDate !== 'string') {
+        return res.status(400).json({ errors: ['recurrence must be {weekdays, startDate, endDate}'] });
+      }
+    }
 
-  const updated = store.setActivityDates(req.params.code, dates, times || {}, recurrence);
-  res.json(serializeCarpool(updated));
+    const updated = await store.setActivityDates(req.params.code, dates, times || {}, recurrence);
+    res.json(serializeCarpool(updated));
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
 });
 
-app.put('/api/carpools/:code/dates/:date/child-exclusion', (req, res) => {
-  const carpool = store.getCarpool(req.params.code);
-  if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
-
-  const { date } = req.params;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ errors: ['Invalid date'] });
-  }
-  const { requesterId, childId, excluded } = req.body;
-  if (typeof childId !== 'string' || typeof excluded !== 'boolean') {
-    return res.status(400).json({ errors: ['childId and excluded are required'] });
-  }
-
+app.put('/api/carpools/:code/dates/:date/child-exclusion', async (req, res) => {
   try {
-    store.setChildExclusion(req.params.code, date, requesterId, childId, excluded);
-    const updated = store.getCarpool(req.params.code);
+    const carpool = await store.getCarpool(req.params.code);
+    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
+
+    const { date } = req.params;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ errors: ['Invalid date'] });
+    }
+    const { requesterId, childId, excluded } = req.body;
+    if (typeof childId !== 'string' || typeof excluded !== 'boolean') {
+      return res.status(400).json({ errors: ['childId and excluded are required'] });
+    }
+
+    await store.setChildExclusion(req.params.code, date, requesterId, childId, excluded);
+    const updated = await store.getCarpool(req.params.code);
     res.json(getScheduleResult(updated));
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.get('/api/carpools/:code/schedule', (req, res) => {
-  const carpool = store.getCarpool(req.params.code);
-  if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
-  res.json(getScheduleResult(carpool));
+app.get('/api/carpools/:code/schedule', async (req, res) => {
+  try {
+    const carpool = await store.getCarpool(req.params.code);
+    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
+    res.json(getScheduleResult(carpool));
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Carpool app running at http://localhost:${PORT}`);
-});
+module.exports = app;

@@ -1,18 +1,19 @@
-const fs = require('fs');
-const path = require('path');
+const { getStore } = require('@netlify/blobs');
 
-const DB_PATH = path.join(__dirname, '..', 'data', 'db.json');
+const STORE_NAME = 'carpool-db';
+const DB_KEY = 'db';
 
-function load() {
-  if (!fs.existsSync(DB_PATH)) return { carpools: {} };
-  const raw = fs.readFileSync(DB_PATH, 'utf8').trim();
-  if (!raw) return { carpools: {} };
-  return JSON.parse(raw);
+function getDbStore() {
+  return getStore(STORE_NAME);
 }
 
-function save(db) {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+async function load() {
+  const db = await getDbStore().get(DB_KEY, { type: 'json' });
+  return db || { carpools: {} };
+}
+
+async function save(db) {
+  await getDbStore().setJSON(DB_KEY, db);
 }
 
 function normalizeCode(code) {
@@ -31,11 +32,11 @@ function generateCode() {
   return code;
 }
 
-function getCarpool(code) {
-  const db = load();
+async function getCarpool(code) {
+  const db = await load();
   const carpool = db.carpools[normalizeCode(code)] || null;
   if (!carpool) return null;
-  if (materializeRecurrence(carpool)) save(db);
+  if (materializeRecurrence(carpool)) await save(db);
   return carpool;
 }
 
@@ -49,8 +50,8 @@ function getCarpoolOrThrow(db, code) {
   return carpool;
 }
 
-function createCarpool(name) {
-  const db = load();
+async function createCarpool(name) {
+  const db = await load();
   let code;
   do {
     code = generateCode();
@@ -68,15 +69,15 @@ function createCarpool(name) {
     dateOverrides: {},
     members: [],
   };
-  save(db);
+  await save(db);
   return db.carpools[code];
 }
 
-function setOwner(code, memberId) {
-  const db = load();
+async function setOwner(code, memberId) {
+  const db = await load();
   const carpool = getCarpoolOrThrow(db, code);
   carpool.ownerId = memberId;
-  save(db);
+  await save(db);
   return carpool;
 }
 
@@ -194,8 +195,8 @@ function materializeRecurrence(carpool) {
   return changed;
 }
 
-function setActivityDates(code, dates, times, recurrence) {
-  const db = load();
+async function setActivityDates(code, dates, times, recurrence) {
+  const db = await load();
   const carpool = getCarpoolOrThrow(db, code);
   const cleanedDates = Array.from(new Set(dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))).sort();
 
@@ -241,7 +242,7 @@ function setActivityDates(code, dates, times, recurrence) {
   carpool.recurrence = newRecurrence;
 
   materializeRecurrence(carpool);
-  save(db);
+  await save(db);
   return carpool;
 }
 
@@ -254,8 +255,8 @@ function composeChildName(firstName, lastNameOverride, parentLastName) {
   return `${String(firstName).trim()} ${lastName}`.trim();
 }
 
-function addMember(code, member) {
-  const db = load();
+async function addMember(code, member) {
+  const db = await load();
   const carpool = getCarpoolOrThrow(db, code);
 
   const id = 'm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -276,22 +277,22 @@ function addMember(code, member) {
     })),
   };
   carpool.members.push(newMember);
-  save(db);
+  await save(db);
   return newMember;
 }
 
 // Returns the updated carpool, or null if removing the member left it empty
 // and the whole carpool (dates, times, recurrence rule and all) was deleted
 // rather than left behind as an orphaned, member-less shell.
-function removeMember(code, memberId) {
-  const db = load();
+async function removeMember(code, memberId) {
+  const db = await load();
   const carpool = getCarpoolOrThrow(db, code);
   const departing = carpool.members.find((m) => m.id === memberId);
   carpool.members = carpool.members.filter((m) => m.id !== memberId);
 
   if (carpool.members.length === 0) {
     delete db.carpools[normalizeCode(code)];
-    save(db);
+    await save(db);
     return null;
   }
 
@@ -307,7 +308,7 @@ function removeMember(code, memberId) {
   if (carpool.ownerId === memberId) {
     carpool.ownerId = carpool.members[0] ? carpool.members[0].id : null;
   }
-  save(db);
+  await save(db);
   return carpool;
 }
 
@@ -326,8 +327,8 @@ function findOwnMember(carpool, memberId, requesterId) {
   return member;
 }
 
-function addChild(code, memberId, requesterId, child) {
-  const db = load();
+async function addChild(code, memberId, requesterId, child) {
+  const db = await load();
   const carpool = getCarpoolOrThrow(db, code);
   const member = findOwnMember(carpool, memberId, requesterId);
 
@@ -339,12 +340,12 @@ function addChild(code, memberId, requesterId, child) {
   };
   member.children = member.children || [];
   member.children.push(newChild);
-  save(db);
+  await save(db);
   return newChild;
 }
 
-function updateChild(code, memberId, requesterId, childId, updates) {
-  const db = load();
+async function updateChild(code, memberId, requesterId, childId, updates) {
+  const db = await load();
   const carpool = getCarpoolOrThrow(db, code);
   const member = findOwnMember(carpool, memberId, requesterId);
   const child = (member.children || []).find((c) => c.id === childId);
@@ -366,12 +367,12 @@ function updateChild(code, memberId, requesterId, childId, updates) {
   if (updates.needsRideBackDays !== undefined) {
     child.needsRideBackDays = Array.from(new Set(updates.needsRideBackDays.map(Number))).sort();
   }
-  save(db);
+  await save(db);
   return child;
 }
 
-function removeChild(code, memberId, requesterId, childId) {
-  const db = load();
+async function removeChild(code, memberId, requesterId, childId) {
+  const db = await load();
   const carpool = getCarpoolOrThrow(db, code);
   const member = findOwnMember(carpool, memberId, requesterId);
   member.children = (member.children || []).filter((c) => c.id !== childId);
@@ -381,12 +382,12 @@ function removeChild(code, memberId, requesterId, childId) {
     const idx = override.excludedChildIds.indexOf(childId);
     if (idx !== -1) override.excludedChildIds.splice(idx, 1);
   });
-  save(db);
+  await save(db);
   return member;
 }
 
-function setChildExclusion(code, date, requesterId, childId, excluded) {
-  const db = load();
+async function setChildExclusion(code, date, requesterId, childId, excluded) {
+  const db = await load();
   const carpool = getCarpoolOrThrow(db, code);
   const parent = carpool.members.find((m) => (m.children || []).some((c) => c.id === childId));
   if (!parent || parent.id !== requesterId) {
@@ -400,7 +401,7 @@ function setChildExclusion(code, date, requesterId, childId, excluded) {
   const idx = list.indexOf(childId);
   if (excluded && idx === -1) list.push(childId);
   if (!excluded && idx !== -1) list.splice(idx, 1);
-  save(db);
+  await save(db);
   return carpool;
 }
 

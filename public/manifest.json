@@ -1,0 +1,22 @@
+{
+  "name": "Carpool",
+  "short_name": "Carpool",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#eaf4fc",
+  "theme_color": "#eaf4fc",
+  "icons": [
+    {
+      "src": "/img/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/img/carpooler-app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

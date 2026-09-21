@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#eaf4fc" />
+<link rel="manifest" href="/manifest.json" />
+<link rel="icon" href="/img/app-icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/img/app-icon.svg" />
+<title>Carpool</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="page">
+  <div class="header-row">
+    <div class="header-title-row">
+      <img src="/img/app-icon.svg" alt="" class="site-logo" />
+      <div>
+        <h1 id="carpoolName">Carpool</h1>
+        <p class="subtitle" id="whoami"></p>
+      </div>
+    </div>
+    <span class="code-badge" id="codeBadge" role="button" tabindex="0"></span>
+  </div>
+
+  <div class="stats-row" id="statsRow"></div>
+
+  <p class="error hidden" id="loadError"></p>
+
+  <div id="problemsCard" class="card hidden">
+    <h2>⚠ Problems</h2>
+    <div id="problemsList" class="problems-list"></div>
+  </div>
+
+  <p class="subtitle hidden" id="noDatesMessage"></p>
+  <button type="button" id="addDatesBtn" class="hidden">Add carpool dates</button>
+
+  <div>
+    <h2>Upcoming carpools</h2>
+    <div class="calendar-header" id="calendarHeader"></div>
+    <div class="calendar-grid" id="calendarGrid"></div>
+  </div>
+
+  <div id="dayDetails" class="day-card hidden"></div>
+
+  <div class="action-bar">
+    <button type="button" id="membersBtn" class="action-btn">
+      <span class="action-icon">👥</span><span>Members</span>
+    </button>
+    <button type="button" id="myChildrenBtn" class="action-btn">
+      <span class="action-icon">👶</span><span>My children</span>
+    </button>
+    <button type="button" id="editDatesBtn" class="action-btn hidden">
+      <span class="action-icon">✏️</span><span>Edit dates</span>
+    </button>
+    <button type="button" id="homeBtn" class="action-btn">
+      <span class="action-icon">🏠</span><span>Home</span>
+    </button>
+    <button type="button" id="leaveGroupBtn" class="action-btn danger">
+      <span class="action-icon">🚪</span><span>Leave group</span>
+    </button>
+  </div>
+</div>
+
+<!-- Members overlay -->
+<div class="overlay hidden" id="membersOverlay">
+  <div class="overlay-card">
+    <div class="header-row">
+      <h2>Members</h2>
+      <button type="button" id="closeMembersOverlay" class="ghost overlay-close-btn">Close</button>
+    </div>
+    <div id="memberList" class="member-list"></div>
+  </div>
+</div>
+
+<!-- My children overlay -->
+<div class="overlay hidden" id="myChildrenOverlay">
+  <div class="overlay-card">
+    <div class="header-row">
+      <h2>My children</h2>
+      <button type="button" id="closeMyChildren" class="ghost overlay-close-btn">Close</button>
+    </div>
+    <div id="myChildrenList"></div>
+    <button type="button" id="addMyChildBtn" class="secondary">+ Add a child</button>
+    <p class="error hidden" id="myChildrenError"></p>
+  </div>
+</div>
+
+<!-- Leave-group confirmation overlay -->
+<div class="overlay hidden" id="leaveConfirmOverlay">
+  <div class="overlay-card">
+    <h2>Leave this carpool?</h2>
+    <p class="subtitle" id="leaveConfirmText"></p>
+    <p class="error hidden" id="leaveError"></p>
+    <div class="confirm-actions">
+      <button type="button" id="cancelLeaveBtn" class="ghost">Cancel</button>
+      <button type="button" id="confirmLeaveBtn" class="danger-btn">Leave group</button>
+    </div>
+  </div>
+</div>
+
+<!-- Owner: edit activity dates overlay -->
+<div class="overlay hidden" id="dateEditorOverlay">
+  <div class="overlay-card">
+    <div class="header-row">
+      <h2>Edit activity dates</h2>
+      <button type="button" id="closeDateEditor" class="ghost overlay-close-btn">Close</button>
+    </div>
+    <p class="subtitle">Tap dates to add or remove them — these are the days the carpool activity happens.</p>
+    <div class="cal-nav">
+      <button type="button" id="editorPrevMonth" class="cal-nav-btn" aria-label="Previous month">‹</button>
+      <h3 class="cal-month-title" id="editorMonthLabel"></h3>
+      <button type="button" id="editorNextMonth" class="cal-nav-btn" aria-label="Next month">›</button>
+    </div>
+    <div class="calendar-header" id="editorCalendarHeader"></div>
+    <div class="calendar-grid" id="editorCalendarGrid"></div>
+    <p class="error hidden" id="dateEditorError"></p>
+    <button type="button" id="saveDatesBtn">Save dates</button>
+  </div>
+</div>
+
+<!-- Time-of-day picker (opens on top of the date editor) -->
+<div class="overlay hidden" id="timePickerOverlay">
+  <div class="overlay-card">
+    <h2 id="timePickerDateLabel"></h2>
+    <div class="field">
+      <label for="timePickerThereInput">Start time (drop-off)</label>
+      <input type="time" id="timePickerThereInput" />
+    </div>
+    <div class="field">
+      <label for="timePickerBackInput">End time (pickup)</label>
+      <input type="time" id="timePickerBackInput" />
+    </div>
+    <p class="error hidden" id="timePickerError"></p>
+    <button type="button" id="saveTimeJustDay">Save for just this day</button>
+    <button type="button" id="saveTimeWeekday" class="secondary hidden">Save for all Mondays</button>
+    <button type="button" id="saveTimeAllDates" class="secondary hidden">Save for all dates</button>
+    <button type="button" id="removeThisDateBtn" class="ghost danger-text">Remove this date</button>
+    <button type="button" id="cancelTimePicker" class="ghost">Cancel</button>
+  </div>
+</div>
+
+<!-- Start route overlay -->
+<div class="overlay hidden" id="routeOverlay">
+  <div class="overlay-card">
+    <div class="header-row">
+      <h2>Your route</h2>
+      <button type="button" id="closeRouteOverlay" class="ghost overlay-close-btn">Close</button>
+    </div>
+    <p class="subtitle" id="routeDateLabel"></p>
+    <div id="routeStops"></div>
+  </div>
+</div>
+
+<script src="/dashboard.js"></script>
+</body>
+</html>

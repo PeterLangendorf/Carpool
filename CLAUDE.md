@@ -28,12 +28,22 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   on demand (schedules are never stored — they're derived fresh from members + dates +
   overrides). Exports the app; does not listen on a port.
 - `netlify/functions/api.js` — thin wrapper that adapts `src/app.js` to a Netlify Function via
-  `serverless-http`. This is the only thing Netlify actually invokes.
+  `serverless-http`. This is the only thing Netlify actually invokes. It also calls
+  `connectLambda(event)` before touching the store — Netlify only auto-injects Blobs'
+  site/token context for its native function signature, not for the classic `(event, context)`
+  shape `serverless-http` produces, so this has to be wired up manually.
 - `src/store.js` — the entire persistence layer, backed by Netlify Blobs (a single JSON blob
   holding the whole `{ carpools: {...} }` document, read-modify-written on every call — no
   in-memory cache, no transactions/locking, so concurrent writes are last-write-wins). Owns
   carpool codes, members, children, activity dates/times, recurrence rules, and per-date child
-  exclusions. All functions are async.
+  exclusions. All functions are async. Blobs uses eventual consistency by default (a write in
+  one call isn't guaranteed visible to an immediately-following separate `load()`), so any
+  store function whose result needs to reflect data it just wrote returns the mutated carpool
+  object directly (e.g. `addChild`/`updateChild`/`removeChild`/`setChildExclusion` return
+  `{ ..., carpool }`, and `createCarpoolWithOwner` builds the carpool and its owner member in
+  one load/save round trip) rather than making the caller re-fetch with `getCarpool()`. Follow
+  that pattern for any new mutation — don't write-then-immediately-`getCarpool()` in the same
+  request.
 - `src/scheduler.js` — pure function `buildSchedule(members, dates, dateOverrides, activityTimes)`
   that assigns drivers. No I/O; safe to reason about/test in isolation.
 - `public/index.html` + `public/app.js` — the member-facing flow: home → create/join a

@@ -118,10 +118,8 @@ app.post('/api/carpools', async (req, res) => {
   if (errors.length) return res.status(400).json({ errors });
 
   try {
-    const carpool = await store.createCarpool(carpoolName);
-    const member = await store.addMember(carpool.code, { name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children });
-    await store.setOwner(carpool.code, member.id);
-    res.status(201).json({ carpool: serializeCarpool(await store.getCarpool(carpool.code)), member });
+    const { carpool, member } = await store.createCarpoolWithOwner(carpoolName, { name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children });
+    res.status(201).json({ carpool: serializeCarpool(carpool), member });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
@@ -173,13 +171,12 @@ app.post('/api/carpools/:code/members/:memberId/children', async (req, res) => {
   if (!first) return res.status(400).json({ errors: ['First name is required'] });
 
   try {
-    const child = await store.addChild(req.params.code, req.params.memberId, requesterId, {
+    const { child, carpool } = await store.addChild(req.params.code, req.params.memberId, requesterId, {
       firstName: first,
       lastNameOverride: lastNameOverride ? String(lastNameOverride).trim() : '',
       needsRideThereDays: parseDays(needsRideThereDays),
       needsRideBackDays: parseDays(needsRideBackDays),
     });
-    const carpool = await store.getCarpool(req.params.code);
     res.status(201).json({ child, carpool: serializeCarpool(carpool) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
@@ -196,8 +193,7 @@ app.patch('/api/carpools/:code/members/:memberId/children/:childId', async (req,
     if (needsRideThereDays !== undefined) updates.needsRideThereDays = parseDays(needsRideThereDays);
     if (needsRideBackDays !== undefined) updates.needsRideBackDays = parseDays(needsRideBackDays);
 
-    await store.updateChild(req.params.code, req.params.memberId, requesterId, req.params.childId, updates);
-    const carpool = await store.getCarpool(req.params.code);
+    const { carpool } = await store.updateChild(req.params.code, req.params.memberId, requesterId, req.params.childId, updates);
     res.json({ carpool: serializeCarpool(carpool), schedule: getScheduleResult(carpool) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
@@ -208,8 +204,7 @@ app.delete('/api/carpools/:code/members/:memberId/children/:childId', async (req
   const { requesterId } = req.body;
 
   try {
-    await store.removeChild(req.params.code, req.params.memberId, requesterId, req.params.childId);
-    const carpool = await store.getCarpool(req.params.code);
+    const { carpool } = await store.removeChild(req.params.code, req.params.memberId, requesterId, req.params.childId);
     res.json({ carpool: serializeCarpool(carpool), schedule: getScheduleResult(carpool) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
@@ -280,8 +275,7 @@ app.put('/api/carpools/:code/dates/:date/child-exclusion', async (req, res) => {
       return res.status(400).json({ errors: ['childId and excluded are required'] });
     }
 
-    await store.setChildExclusion(req.params.code, date, requesterId, childId, excluded);
-    const updated = await store.getCarpool(req.params.code);
+    const updated = await store.setChildExclusion(req.params.code, date, requesterId, childId, excluded);
     res.json(getScheduleResult(updated));
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });

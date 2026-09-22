@@ -50,37 +50,6 @@ function getCarpoolOrThrow(db, code) {
   return carpool;
 }
 
-async function createCarpool(name) {
-  const db = await load();
-  let code;
-  do {
-    code = generateCode();
-  } while (db.carpools[code]);
-
-  db.carpools[code] = {
-    code,
-    name: name && name.trim() ? name.trim() : code,
-    createdAt: new Date().toISOString(),
-    ownerId: null,
-    activityDates: [],
-    activityTimes: { uniform: {}, perWeekday: {}, perDate: {} },
-    recurrence: null,
-    recurrenceExcludedDates: [],
-    dateOverrides: {},
-    members: [],
-  };
-  await save(db);
-  return db.carpools[code];
-}
-
-async function setOwner(code, memberId) {
-  const db = await load();
-  const carpool = getCarpoolOrThrow(db, code);
-  carpool.ownerId = memberId;
-  await save(db);
-  return carpool;
-}
-
 const TIME_RE = /^\d{2}:\d{2}$/;
 
 function cleanLegTimes(value) {
@@ -255,14 +224,10 @@ function composeChildName(firstName, lastNameOverride, parentLastName) {
   return `${String(firstName).trim()} ${lastName}`.trim();
 }
 
-async function addMember(code, member) {
-  const db = await load();
-  const carpool = getCarpoolOrThrow(db, code);
-
-  const id = 'm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+function buildMember(member) {
   const lastName = (member.lastName || '').trim();
-  const newMember = {
-    id,
+  return {
+    id: 'm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
     name: member.name.trim(),
     lastName,
     address: (member.address || '').trim(),
@@ -276,6 +241,43 @@ async function addMember(code, member) {
       needsRideBackDays: Array.from(new Set((child.needsRideBackDays || []).map(Number))).sort(),
     })),
   };
+}
+
+// Creates a carpool and its first (owner) member in a single load/save round
+// trip. Netlify Blobs' default eventual consistency means a create followed
+// immediately by a separate read/write against the same key can miss the
+// prior write, so anything that must see its own just-created data has to
+// happen within one load/save cycle rather than a load(); save(); load()...
+// chain across multiple store calls.
+async function createCarpoolWithOwner(name, memberInput) {
+  const db = await load();
+  let code;
+  do {
+    code = generateCode();
+  } while (db.carpools[code]);
+
+  const member = buildMember(memberInput);
+  const carpool = {
+    code,
+    name: name && name.trim() ? name.trim() : code,
+    createdAt: new Date().toISOString(),
+    ownerId: member.id,
+    activityDates: [],
+    activityTimes: { uniform: {}, perWeekday: {}, perDate: {} },
+    recurrence: null,
+    recurrenceExcludedDates: [],
+    dateOverrides: {},
+    members: [member],
+  };
+  db.carpools[code] = carpool;
+  await save(db);
+  return { carpool, member };
+}
+
+async function addMember(code, member) {
+  const db = await load();
+  const carpool = getCarpoolOrThrow(db, code);
+  const newMember = buildMember(member);
   carpool.members.push(newMember);
   await save(db);
   return newMember;
@@ -341,7 +343,7 @@ async function addChild(code, memberId, requesterId, child) {
   member.children = member.children || [];
   member.children.push(newChild);
   await save(db);
-  return newChild;
+  return { child: newChild, carpool };
 }
 
 async function updateChild(code, memberId, requesterId, childId, updates) {
@@ -368,7 +370,7 @@ async function updateChild(code, memberId, requesterId, childId, updates) {
     child.needsRideBackDays = Array.from(new Set(updates.needsRideBackDays.map(Number))).sort();
   }
   await save(db);
-  return child;
+  return { child, carpool };
 }
 
 async function removeChild(code, memberId, requesterId, childId) {
@@ -383,7 +385,7 @@ async function removeChild(code, memberId, requesterId, childId) {
     if (idx !== -1) override.excludedChildIds.splice(idx, 1);
   });
   await save(db);
-  return member;
+  return { member, carpool };
 }
 
 async function setChildExclusion(code, date, requesterId, childId, excluded) {
@@ -407,14 +409,13 @@ async function setChildExclusion(code, date, requesterId, childId, excluded) {
 
 module.exports = {
   getCarpool,
-  createCarpool,
+  createCarpoolWithOwner,
   addMember,
   removeMember,
   addChild,
   updateChild,
   removeChild,
   normalizeCode,
-  setOwner,
   setActivityDates,
   setChildExclusion,
   resolveActivityTimes,

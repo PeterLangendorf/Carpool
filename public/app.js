@@ -933,21 +933,13 @@ document.querySelector('[data-step-form="create-candrive"]').addEventListener('s
         children,
         canDriveThereDays: wizard.canDriveThereDays,
         canDriveBackDays: wizard.canDriveBackDays,
-      }),
-    });
-    createdCode = data.carpool.code;
-    saveIdentity(createdCode, data.member);
-
-    await api(`/api/carpools/${encodeURIComponent(createdCode)}/activity-dates`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        requesterId: data.member.id,
         dates: wizard.activityDates,
         times: wizard.activityTimes,
         recurrence: wizard.recurrence,
       }),
     });
+    createdCode = data.carpool.code;
+    saveIdentity(createdCode, data.member);
 
     rememberCarpool(createdCode, data.carpool.name);
     document.getElementById('createdCode').textContent = createdCode;

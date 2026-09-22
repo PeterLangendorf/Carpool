@@ -164,9 +164,7 @@ function materializeRecurrence(carpool) {
   return changed;
 }
 
-async function setActivityDates(code, dates, times, recurrence) {
-  const db = await load();
-  const carpool = getCarpoolOrThrow(db, code);
+function applyActivityDates(carpool, dates, times, recurrence) {
   const cleanedDates = Array.from(new Set(dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))).sort();
 
   const recurrenceUnchanged = recurrence === undefined;
@@ -211,6 +209,12 @@ async function setActivityDates(code, dates, times, recurrence) {
   carpool.recurrence = newRecurrence;
 
   materializeRecurrence(carpool);
+}
+
+async function setActivityDates(code, dates, times, recurrence) {
+  const db = await load();
+  const carpool = getCarpoolOrThrow(db, code);
+  applyActivityDates(carpool, dates, times, recurrence);
   await save(db);
   return carpool;
 }
@@ -249,7 +253,7 @@ function buildMember(member) {
 // prior write, so anything that must see its own just-created data has to
 // happen within one load/save cycle rather than a load(); save(); load()...
 // chain across multiple store calls.
-async function createCarpoolWithOwner(name, memberInput) {
+async function createCarpoolWithOwner(name, memberInput, activityDatesInput) {
   const db = await load();
   let code;
   do {
@@ -270,6 +274,9 @@ async function createCarpoolWithOwner(name, memberInput) {
     members: [member],
   };
   db.carpools[code] = carpool;
+  if (activityDatesInput) {
+    applyActivityDates(carpool, activityDatesInput.dates, activityDatesInput.times, activityDatesInput.recurrence);
+  }
   await save(db);
   return { carpool, member };
 }

@@ -113,12 +113,17 @@ function getScheduleResult(carpool) {
 }
 
 app.post('/api/carpools', async (req, res) => {
-  const { carpoolName } = req.body;
+  const { carpoolName, dates, times, recurrence } = req.body;
   const { errors, name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children } = validateMemberInput(req.body);
+  if (dates !== undefined) errors.push(...activityDatesErrors(dates, times, recurrence));
   if (errors.length) return res.status(400).json({ errors });
 
   try {
-    const { carpool, member } = await store.createCarpoolWithOwner(carpoolName, { name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children });
+    const { carpool, member } = await store.createCarpoolWithOwner(
+      carpoolName,
+      { name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children },
+      dates !== undefined ? { dates, times: times || {}, recurrence } : null
+    );
     res.status(201).json({ carpool: serializeCarpool(carpool), member });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
@@ -233,6 +238,22 @@ function isValidActivityTimes(times) {
   return true;
 }
 
+function activityDatesErrors(dates, times, recurrence) {
+  const errors = [];
+  if (!Array.isArray(dates) || !dates.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))) {
+    errors.push('dates must be an array of YYYY-MM-DD strings');
+  }
+  if (!isValidActivityTimes(times)) {
+    errors.push('times must be a {uniform, perWeekday, perDate} object of there/back HH:MM strings');
+  }
+  if (recurrence !== undefined && recurrence !== null) {
+    if (typeof recurrence !== 'object' || !Array.isArray(recurrence.weekdays) || typeof recurrence.startDate !== 'string') {
+      errors.push('recurrence must be {weekdays, startDate, endDate}');
+    }
+  }
+  return errors;
+}
+
 app.put('/api/carpools/:code/activity-dates', async (req, res) => {
   try {
     const carpool = await store.getCarpool(req.params.code);
@@ -242,17 +263,8 @@ app.put('/api/carpools/:code/activity-dates', async (req, res) => {
     if (requesterId !== getEffectiveOwnerId(carpool)) {
       return res.status(403).json({ errors: ['Only the owner can edit activity dates'] });
     }
-    if (!Array.isArray(dates) || !dates.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))) {
-      return res.status(400).json({ errors: ['dates must be an array of YYYY-MM-DD strings'] });
-    }
-    if (!isValidActivityTimes(times)) {
-      return res.status(400).json({ errors: ['times must be a {uniform, perWeekday, perDate} object of there/back HH:MM strings'] });
-    }
-    if (recurrence !== undefined && recurrence !== null) {
-      if (typeof recurrence !== 'object' || !Array.isArray(recurrence.weekdays) || typeof recurrence.startDate !== 'string') {
-        return res.status(400).json({ errors: ['recurrence must be {weekdays, startDate, endDate}'] });
-      }
-    }
+    const errors = activityDatesErrors(dates, times, recurrence);
+    if (errors.length) return res.status(400).json({ errors });
 
     const updated = await store.setActivityDates(req.params.code, dates, times || {}, recurrence);
     res.json(serializeCarpool(updated));

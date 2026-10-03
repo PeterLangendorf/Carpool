@@ -59,7 +59,110 @@ function timesLine(activityTimes) {
   return 'Varies by date';
 }
 
-function buildSummary(carpool, member, siteUrl) {
+function mapsUrl(address) {
+  return `https://maps.apple.com/?address=${encodeURIComponent(address)}`;
+}
+
+// Mirrors the dashboard's rideAddressFor: the address a member picked for
+// this leg + weekday, falling back to their first address.
+function rideAddressFor(member, leg, weekday) {
+  const addresses = (member && member.addresses) || [];
+  const chosenId = member && member.rideAddresses && member.rideAddresses[leg] && member.rideAddresses[leg][weekday];
+  const match = addresses.find((a) => a.id === chosenId) || addresses[0];
+  return match ? match.address : null;
+}
+
+// Stops for one ride, in driving order — the same list the dashboard's
+// "Start route" shows. Drop off: rider pickups, then the activity. Pick up:
+// the activity, then rider drop-offs.
+function rideStops(carpool, members, driver, entry, leg) {
+  const legData = entry[leg];
+  const groups = new Map();
+  legData.children.forEach((c) => {
+    // With a single address, the driver's own riders start/end at home with them.
+    if (c.parentId === driver.id && (driver.addresses || []).length <= 1) return;
+    const parent = members.find((m) => m.id === c.parentId);
+    const address = rideAddressFor(parent, leg, entry.weekday);
+    const key = `${c.parentId}|${address || ''}`;
+    if (!groups.has(key)) groups.set(key, { address, riders: [] });
+    groups.get(key).riders.push(c.name);
+  });
+  const riderStops = Array.from(groups.values()).map((g) => ({
+    address: g.address,
+    note: `${leg === 'there' ? 'Pick up' : 'Drop off'} ${g.riders.join(', ')}`,
+  }));
+  const activityStop = { address: carpool.activityLocation || null, note: carpool.activityName || 'Activity' };
+  return leg === 'there' ? [...riderStops, activityStop] : [activityStop, ...riderStops];
+}
+
+// Every ride `member` is scheduled to drive from today to the end of the
+// current month.
+function drivesThisMonth(carpool, member, schedule, members) {
+  const monthKey = new Date().toISOString().slice(0, 7);
+  const rows = [];
+  (schedule || [])
+    .filter((e) => e.date.startsWith(monthKey))
+    .forEach((entry) => {
+      ['there', 'back'].forEach((leg) => {
+        if (!entry[leg].drivers.some((d) => d.id === member.id)) return;
+        rows.push({
+          date: entry.date,
+          ride: leg === 'there' ? 'Drop off' : 'Pick up',
+          time: leg === 'there' ? entry.thereTime : entry.backTime,
+          stops: rideStops(carpool, members, members.find((m) => m.id === member.id) || member, entry, leg),
+        });
+      });
+    });
+  return rows;
+}
+
+function monthName() {
+  return new Date().toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+}
+
+function drivesHtml(rows) {
+  const heading = `<h3 style="font-size:16px;margin:24px 0 8px">Your drives for the rest of ${monthName()}</h3>`;
+  if (!rows.length) {
+    return `${heading}<p style="font-size:14px;color:#6b7280">You're not scheduled to drive for the rest of ${monthName()}.</p>`;
+  }
+  const cell = 'padding:8px;border-bottom:1px solid #d3e6f7;vertical-align:top;font-size:14px';
+  const head = 'padding:8px;border-bottom:2px solid #d3e6f7;text-align:left;font-size:12px;color:#6b7280';
+  const body = rows
+    .map((r) => {
+      const stops = r.stops
+        .map((st, i) => {
+          const place = st.address
+            ? `<a href="${escapeHtml(mapsUrl(st.address))}" style="color:#0ea5e9;font-weight:600;text-decoration:none">${escapeHtml(st.address)}</a>`
+            : '<span style="color:#6b7280">No address on file</span>';
+          return `<div style="margin-bottom:4px">${i + 1}. ${place}<br><span style="color:#6b7280;font-size:12px">${escapeHtml(st.note)}</span></div>`;
+        })
+        .join('');
+      return `<tr><td style="${cell};white-space:nowrap">${escapeHtml(formatDate(r.date))}</td><td style="${cell};white-space:nowrap">${escapeHtml(r.ride)}<br><span style="color:#6b7280">${escapeHtml(formatTime(r.time))}</span></td><td style="${cell}">${stops}</td></tr>`;
+    })
+    .join('');
+  return `${heading}
+      <table style="border-collapse:collapse;width:100%">
+        <tr><th style="${head}">Date</th><th style="${head}">Ride</th><th style="${head}">Stops</th></tr>
+        ${body}
+      </table>
+      <p style="font-size:12px;color:#6b7280">This is the schedule as of today. It can change as people join or update their availability, so check the app for the latest.</p>`;
+}
+
+function drivesText(rows) {
+  if (!rows.length) return [`You're not scheduled to drive for the rest of ${monthName()}.`];
+  return [
+    `Your drives for the rest of ${monthName()}:`,
+    ...rows.map(
+      (r) =>
+        `- ${formatDate(r.date)}, ${r.ride} at ${formatTime(r.time)}: ` +
+        r.stops.map((st) => `${st.address || 'No address on file'} (${st.note}) ${st.address ? mapsUrl(st.address) : ''}`.trim()).join(' -> ')
+    ),
+    '(Schedule as of today; check the app for the latest.)',
+  ];
+}
+
+function buildSummary(carpool, member, siteUrl, scheduleInfo) {
+  const drives = scheduleInfo ? drivesThisMonth(carpool, member, scheduleInfo.schedule, scheduleInfo.members) : null;
   const link = `${siteUrl}/?code=${encodeURIComponent(carpool.code)}&tab=join`;
   const riders = (member.children || []).map((c) => c.name);
   const firstChild = (member.children || [])[0];
@@ -91,12 +194,13 @@ function buildSummary(carpool, member, siteUrl) {
     '',
     ...filled.map(([k, v]) => `${k}: ${v}`),
     '',
+    ...(drives ? [...drivesText(drives), ''] : []),
     `Share the join code ${carpool.code} with others in your carpool, or send them this link:`,
     link,
   ].join('\n');
 
   const html = `
-    <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#14161a;max-width:520px">
+    <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#14161a;background:#ffffff;padding:20px;border-radius:12px;max-width:560px">
       <p>Hi ${escapeHtml(member.name)},</p>
       <p>Here's a summary of your carpool <strong>${escapeHtml(carpool.name)}</strong>.</p>
       <p style="font-family:Menlo,monospace;font-size:28px;font-weight:700;letter-spacing:4px;text-align:center;padding:14px;border:2px dashed #0ea5e9;border-radius:12px;background:#eaf4fc">${escapeHtml(carpool.code)}</p>
@@ -108,6 +212,7 @@ function buildSummary(carpool, member, siteUrl) {
           )
           .join('')}
       </table>
+      ${drives ? drivesHtml(drives) : ''}
       <p>Share the join code with others in your carpool, or send them this link:<br><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p>
     </div>
   `;
@@ -121,9 +226,11 @@ function isEmailConfigured() {
 
 // Resolves to true if the email was accepted for delivery. Never throws — a
 // failed email must not fail the carpool create/join that triggered it.
-async function sendCarpoolSummary(to, carpool, member, siteUrl) {
+// `scheduleInfo` ({ schedule, members }, members normalized) adds the
+// member's drives for the rest of the month.
+async function sendCarpoolSummary(to, carpool, member, siteUrl, scheduleInfo) {
   if (!to || !isEmailConfigured()) return false;
-  const { subject, text, html } = buildSummary(carpool, member, siteUrl);
+  const { subject, text, html } = buildSummary(carpool, member, siteUrl, scheduleInfo);
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',

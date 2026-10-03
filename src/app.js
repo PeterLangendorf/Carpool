@@ -182,7 +182,10 @@ app.post('/api/carpools', async (req, res) => {
       memberInput,
       dates !== undefined ? { dates, times: times || {}, recurrence } : null
     );
-    const emailSent = await sendCarpoolSummary(member.email, carpool, member, siteUrl(req));
+    const emailSent = await sendCarpoolSummary(member.email, carpool, member, siteUrl(req), {
+      schedule: getScheduleResult(carpool).schedule,
+      members: normalizeMembers(carpool.members),
+    });
     res.status(201).json({ carpool: serializeCarpool(carpool), member: normalizeMembers([member])[0], emailSent });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
@@ -205,7 +208,10 @@ app.post('/api/carpools/:code/members', async (req, res) => {
 
   try {
     const { member, carpool } = await store.addMember(req.params.code, memberInput);
-    const emailSent = await sendCarpoolSummary(member.email, carpool, member, siteUrl(req));
+    const emailSent = await sendCarpoolSummary(member.email, carpool, member, siteUrl(req), {
+      schedule: getScheduleResult(carpool).schedule,
+      members: normalizeMembers(carpool.members),
+    });
     res.status(201).json({ member: normalizeMembers([member])[0], emailSent });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });

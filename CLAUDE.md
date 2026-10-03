@@ -79,9 +79,11 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   address). The create/join request sends `addresses` as strings and `rideAddresses` as
   indexes into that list; `store.buildMember` swaps indexes for generated IDs. The legacy
   single `address` field is still written (as the first address) and upgraded on read by
-  `normalizeMembers`.
+  `normalizeMembers`. Members edit theirs later via `PUT .../members/:memberId/addresses`
+  (entries keep their `id` so existing ride choices survive edits).
 - **Carpools have `activityName` / `activityLocation`**; the location is the end of every
   drop-off route and the start of every pick-up route in the dashboard's route overlay.
+  The owner edits them (and the carpool name) via `PATCH /api/carpools/:code/details`.
 - **Summary email** (`src/email.js`): sent on create and join via Resend's HTTP API, only
   when the `RESEND_API_KEY` and `EMAIL_FROM` env vars are set (otherwise a silent no-op).
   Member emails are stored but stripped from every API response by `normalizeMembers`.

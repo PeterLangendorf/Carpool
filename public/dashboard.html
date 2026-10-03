@@ -53,6 +53,12 @@
     <button type="button" id="myChildrenBtn" class="action-btn">
       <span class="action-icon">🧒</span><span>My riders</span>
     </button>
+    <button type="button" id="myAddressesBtn" class="action-btn">
+      <span class="action-icon">📍</span><span>My addresses</span>
+    </button>
+    <button type="button" id="editDetailsBtn" class="action-btn hidden">
+      <span class="action-icon">⚽</span><span>Edit activity</span>
+    </button>
     <button type="button" id="editDatesBtn" class="action-btn hidden">
       <span class="action-icon">✏️</span><span>Edit dates</span>
     </button>
@@ -86,6 +92,50 @@
     <div id="myChildrenList"></div>
     <button type="button" id="addMyChildBtn" class="secondary">+ Add a rider</button>
     <p class="error hidden" id="myChildrenError"></p>
+  </div>
+</div>
+
+<!-- My addresses overlay -->
+<div class="overlay hidden" id="myAddressesOverlay">
+  <div class="overlay-card">
+    <div class="header-row">
+      <h2>My addresses</h2>
+      <button type="button" id="closeMyAddresses" class="ghost overlay-close-btn">Close</button>
+    </div>
+    <p class="subtitle">This is where your rider(s) will be picked up before the activity and dropped off after the activity.</p>
+    <div class="child-list" id="myAddressesList"></div>
+    <button type="button" id="addMyAddressBtn" class="secondary">+ Add an address</button>
+    <div id="myRideAddressesSection" class="hidden">
+      <h2>Address for each ride</h2>
+      <p class="subtitle">Pick where your riders are picked up from (drop off) or dropped off at (pick up).</p>
+      <div id="myRideAddressesList"></div>
+    </div>
+    <p class="error hidden" id="myAddressesError"></p>
+    <button type="button" id="saveMyAddressesBtn">Save addresses</button>
+  </div>
+</div>
+
+<!-- Owner: edit carpool/activity details overlay -->
+<div class="overlay hidden" id="detailsOverlay">
+  <div class="overlay-card">
+    <div class="header-row">
+      <h2>Edit activity</h2>
+      <button type="button" id="closeDetailsOverlay" class="ghost overlay-close-btn">Close</button>
+    </div>
+    <div class="field">
+      <label for="detailsCarpoolName">Carpool name</label>
+      <input type="text" id="detailsCarpoolName" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="detailsActivityName">Name of the activity</label>
+      <input type="text" id="detailsActivityName" placeholder="e.g. Soccer practice" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="detailsActivityLocation">Location of the activity</label>
+      <input type="text" id="detailsActivityLocation" placeholder="e.g. Pine Hill field" autocomplete="off" />
+    </div>
+    <p class="error hidden" id="detailsError"></p>
+    <button type="button" id="saveDetailsBtn">Save</button>
   </div>
 </div>
 

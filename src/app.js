@@ -354,6 +354,63 @@ app.put('/api/carpools/:code/dates/:date/child-exclusion', async (req, res) => {
   }
 });
 
+app.patch('/api/carpools/:code/details', async (req, res) => {
+  try {
+    const carpool = await store.getCarpool(req.params.code);
+    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
+
+    const { requesterId } = req.body;
+    if (requesterId !== getEffectiveOwnerId(carpool)) {
+      return res.status(403).json({ errors: ['Only the owner can edit carpool details'] });
+    }
+
+    const details = {};
+    const errors = [];
+    [
+      ['name', 'Carpool name'],
+      ['activityName', 'Activity name'],
+      ['activityLocation', 'Activity location'],
+    ].forEach(([key, label]) => {
+      if (req.body[key] === undefined) return;
+      details[key] = String(req.body[key]).trim();
+      if (!details[key]) errors.push(`${label} is required`);
+    });
+    if (errors.length) return res.status(400).json({ errors });
+
+    const updated = await store.updateCarpoolDetails(req.params.code, details);
+    res.json(serializeCarpool(updated));
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
+});
+
+// Body: { requesterId, addresses: [{ id?, address }], rideAddresses } where
+// rideAddresses indexes into `addresses`, as on create/join.
+app.put('/api/carpools/:code/members/:memberId/addresses', async (req, res) => {
+  const raw = Array.isArray(req.body.addresses) ? req.body.addresses : [];
+  const addresses = raw
+    .map((a) => ({ id: a && typeof a.id === 'string' ? a.id : null, address: String((a && a.address) || '').trim() }))
+    .filter((a) => a.address)
+    .slice(0, MAX_ADDRESSES);
+  if (addresses.length !== Math.min(raw.length, MAX_ADDRESSES)) {
+    return res.status(400).json({ errors: ['Fill in or remove empty addresses'] });
+  }
+  const rideAddresses = parseRideAddresses(req.body.rideAddresses, addresses.length);
+
+  try {
+    const { carpool } = await store.setMemberAddresses(
+      req.params.code,
+      req.params.memberId,
+      req.body.requesterId,
+      addresses,
+      rideAddresses
+    );
+    res.json({ carpool: serializeCarpool(carpool) });
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
+});
+
 app.get('/api/carpools/:code/schedule', async (req, res) => {
   try {
     const carpool = await store.getCarpool(req.params.code);

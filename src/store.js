@@ -433,8 +433,59 @@ async function setChildExclusion(code, date, requesterId, childId, excluded) {
   return carpool;
 }
 
+async function updateCarpoolDetails(code, details) {
+  const db = await load();
+  const carpool = getCarpoolOrThrow(db, code);
+  ['name', 'activityName', 'activityLocation'].forEach((key) => {
+    if (details[key] !== undefined) carpool[key] = String(details[key]).trim();
+  });
+  await save(db);
+  return carpool;
+}
+
+// Replaces a member's address list. Entries that carry an existing address
+// ID keep it; new entries get a fresh ID. `rideAddresses` is in the same
+// index-based shape buildMember accepts.
+async function setMemberAddresses(code, memberId, requesterId, addresses, rideAddresses) {
+  const db = await load();
+  const carpool = getCarpoolOrThrow(db, code);
+  if (memberId !== requesterId) {
+    const err = new Error('You can only edit your own addresses');
+    err.status = 403;
+    throw err;
+  }
+  const member = carpool.members.find((m) => m.id === memberId);
+  if (!member) {
+    const err = new Error('Member not found');
+    err.status = 404;
+    throw err;
+  }
+  if ((member.children || []).length && !addresses.length) {
+    const err = new Error('At least one address is required while you have riders');
+    err.status = 400;
+    throw err;
+  }
+
+  const existingIds = new Set((member.addresses || []).map((a) => a.id));
+  member.addresses = addresses.map((a) => ({
+    id: a.id && existingIds.has(a.id) ? a.id : generateAddressId(),
+    address: a.address,
+  }));
+  member.address = member.addresses[0] ? member.addresses[0].address : '';
+  member.rideAddresses = { there: {}, back: {} };
+  ['there', 'back'].forEach((leg) => {
+    Object.entries((rideAddresses && rideAddresses[leg]) || {}).forEach(([weekday, index]) => {
+      if (member.addresses[index]) member.rideAddresses[leg][weekday] = member.addresses[index].id;
+    });
+  });
+  await save(db);
+  return { member, carpool };
+}
+
 module.exports = {
   getCarpool,
+  updateCarpoolDetails,
+  setMemberAddresses,
   createCarpoolWithOwner,
   addMember,
   removeMember,

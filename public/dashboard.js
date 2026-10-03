@@ -208,7 +208,7 @@ function unlockBodyScroll() {
   }
 }
 
-['membersOverlay', 'leaveConfirmOverlay', 'dateEditorOverlay', 'routeOverlay', 'myChildrenOverlay', 'timePickerOverlay'].forEach((id) => {
+['membersOverlay', 'leaveConfirmOverlay', 'dateEditorOverlay', 'routeOverlay', 'myChildrenOverlay', 'timePickerOverlay', 'myAddressesOverlay', 'detailsOverlay'].forEach((id) => {
   const el = document.getElementById(id);
   el.addEventListener(
     'touchmove',
@@ -827,6 +827,7 @@ function renderAll() {
   document.getElementById('codeBadge').textContent = carpool.code;
   document.getElementById('whoami').textContent = `Signed in as ${identity.name}`;
   document.getElementById('editDatesBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
+  document.getElementById('editDetailsBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
   renderStats();
   renderProblems();
   renderDatesStatus();
@@ -1048,6 +1049,198 @@ document.getElementById('saveDatesBtn').addEventListener('click', async () => {
     renderAll();
   } catch (err) {
     showError(errorEl, err.message);
+  }
+});
+
+// ---- My addresses overlay ----
+
+// Working copy while the overlay is open: rides point at address rows by
+// index (the same shape the API takes), so adding/removing rows only has to
+// shift those indexes.
+let addressDraft = []; // [{ id, address }]
+let rideAddressDraft = { there: {}, back: {} }; // leg -> weekday -> index into addressDraft
+
+function myRides() {
+  const me = carpool.members.find((m) => m.id === identity.id);
+  const rides = [];
+  ['there', 'back'].forEach((leg) => {
+    const days = new Set();
+    (me.children || []).forEach((c) => (leg === 'there' ? c.needsRideThereDays : c.needsRideBackDays).forEach((d) => days.add(d)));
+    sortDays(Array.from(days)).forEach((weekday) => rides.push({ leg, weekday }));
+  });
+  return rides.sort((a, b) => a.weekday - b.weekday || (a.leg === 'there' ? -1 : 1));
+}
+
+function renderMyRideAddresses() {
+  const section = document.getElementById('myRideAddressesSection');
+  const list = document.getElementById('myRideAddressesList');
+  const filled = addressDraft.map((a, i) => ({ ...a, index: i })).filter((a) => a.address.trim());
+  const rides = myRides();
+  section.classList.toggle('hidden', filled.length < 2 || rides.length === 0);
+  list.innerHTML = '';
+  rides.forEach(({ leg, weekday }) => {
+    const chosen = rideAddressDraft[leg][weekday] || 0;
+    const row = document.createElement('div');
+    row.className = 'ride-address-row';
+    row.innerHTML = `
+      <span>${FULL_DAY_LABELS[weekday]} · ${leg === 'there' ? 'Drop off' : 'Pick up'}</span>
+      <select>${filled
+        .map((a) => `<option value="${a.index}" ${a.index === chosen ? 'selected' : ''}>${escapeHtml(a.address)}</option>`)
+        .join('')}</select>
+    `;
+    row.querySelector('select').addEventListener('change', (e) => {
+      rideAddressDraft[leg][weekday] = Number(e.target.value);
+    });
+    list.appendChild(row);
+  });
+}
+
+function renderMyAddresses() {
+  const list = document.getElementById('myAddressesList');
+  list.innerHTML = '';
+  addressDraft.forEach((a, i) => {
+    const row = document.createElement('div');
+    row.className = 'child-row';
+    row.innerHTML = `
+      <div class="child-row-main">
+        <input type="text" class="child-name-input" placeholder="e.g. 123 Main St" autocomplete="street-address" />
+        <button type="button" class="remove-child-btn" aria-label="Remove address">×</button>
+      </div>
+    `;
+    const input = row.querySelector('input');
+    input.value = a.address;
+    input.addEventListener('input', () => {
+      a.address = input.value;
+    });
+    input.addEventListener('change', renderMyRideAddresses);
+    row.querySelector('.remove-child-btn').addEventListener('click', () => removeDraftAddress(i));
+    list.appendChild(row);
+  });
+  renderMyRideAddresses();
+}
+
+function removeDraftAddress(index) {
+  addressDraft.splice(index, 1);
+  ['there', 'back'].forEach((leg) => {
+    Object.keys(rideAddressDraft[leg]).forEach((w) => {
+      const i = rideAddressDraft[leg][w];
+      if (i === index) rideAddressDraft[leg][w] = 0;
+      else if (i > index) rideAddressDraft[leg][w] = i - 1;
+    });
+  });
+  if (!addressDraft.length) addressDraft.push({ id: null, address: '' });
+  renderMyAddresses();
+}
+
+function openMyAddressesOverlay() {
+  const me = carpool.members.find((m) => m.id === identity.id);
+  addressDraft = (me.addresses || []).map((a) => ({ id: a.id, address: a.address }));
+  if (!addressDraft.length) addressDraft.push({ id: null, address: '' });
+  rideAddressDraft = { there: {}, back: {} };
+  ['there', 'back'].forEach((leg) => {
+    Object.entries((me.rideAddresses && me.rideAddresses[leg]) || {}).forEach(([w, id]) => {
+      const index = addressDraft.findIndex((a) => a.id === id);
+      if (index !== -1) rideAddressDraft[leg][w] = index;
+    });
+  });
+  showError(document.getElementById('myAddressesError'), '');
+  renderMyAddresses();
+  document.getElementById('myAddressesOverlay').classList.remove('hidden');
+  lockBodyScroll();
+}
+
+function dismissMyAddressesOverlay() {
+  document.getElementById('myAddressesOverlay').classList.add('hidden');
+  unlockBodyScroll();
+}
+
+document.getElementById('myAddressesBtn').addEventListener('click', openMyAddressesOverlay);
+document.getElementById('closeMyAddresses').addEventListener('click', dismissMyAddressesOverlay);
+document.getElementById('addMyAddressBtn').addEventListener('click', () => {
+  addressDraft.push({ id: null, address: '' });
+  renderMyAddresses();
+  const inputs = document.querySelectorAll('#myAddressesList input');
+  inputs[inputs.length - 1].focus();
+});
+
+document.getElementById('saveMyAddressesBtn').addEventListener('click', async () => {
+  const errorEl = document.getElementById('myAddressesError');
+  showError(errorEl, '');
+
+  // Drop blank rows, remapping ride indexes to the compacted list.
+  const indexMap = new Map();
+  const addresses = [];
+  addressDraft.forEach((a, i) => {
+    if (!a.address.trim()) return;
+    indexMap.set(i, addresses.length);
+    addresses.push({ id: a.id, address: a.address.trim() });
+  });
+  const rideAddresses = { there: {}, back: {} };
+  ['there', 'back'].forEach((leg) => {
+    Object.entries(rideAddressDraft[leg]).forEach(([w, i]) => {
+      if (indexMap.has(i)) rideAddresses[leg][w] = indexMap.get(i);
+    });
+  });
+
+  const btn = document.getElementById('saveMyAddressesBtn');
+  btn.disabled = true;
+  try {
+    const data = await api(`/api/carpools/${encodeURIComponent(code)}/members/${identity.id}/addresses`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: identity.id, addresses, rideAddresses }),
+    });
+    carpool = data.carpool;
+    dismissMyAddressesOverlay();
+    renderAll();
+  } catch (err) {
+    showError(errorEl, err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---- Owner: edit carpool/activity details overlay ----
+
+function openDetailsOverlay() {
+  document.getElementById('detailsCarpoolName').value = carpool.name || '';
+  document.getElementById('detailsActivityName').value = carpool.activityName || '';
+  document.getElementById('detailsActivityLocation').value = carpool.activityLocation || '';
+  showError(document.getElementById('detailsError'), '');
+  document.getElementById('detailsOverlay').classList.remove('hidden');
+  lockBodyScroll();
+}
+
+function dismissDetailsOverlay() {
+  document.getElementById('detailsOverlay').classList.add('hidden');
+  unlockBodyScroll();
+}
+
+document.getElementById('editDetailsBtn').addEventListener('click', openDetailsOverlay);
+document.getElementById('closeDetailsOverlay').addEventListener('click', dismissDetailsOverlay);
+
+document.getElementById('saveDetailsBtn').addEventListener('click', async () => {
+  const errorEl = document.getElementById('detailsError');
+  const name = document.getElementById('detailsCarpoolName').value.trim();
+  const activityName = document.getElementById('detailsActivityName').value.trim();
+  const activityLocation = document.getElementById('detailsActivityLocation').value.trim();
+  if (!name || !activityName || !activityLocation) return showError(errorEl, 'Please fill in all three fields');
+  showError(errorEl, '');
+
+  const btn = document.getElementById('saveDetailsBtn');
+  btn.disabled = true;
+  try {
+    carpool = await api(`/api/carpools/${encodeURIComponent(code)}/details`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: identity.id, name, activityName, activityLocation }),
+    });
+    dismissDetailsOverlay();
+    renderAll();
+  } catch (err) {
+    showError(errorEl, err.message);
+  } finally {
+    btn.disabled = false;
   }
 });
 

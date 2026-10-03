@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { getStore } = require('@netlify/blobs');
 
 const STORE_NAME = 'carpool-db';
@@ -243,6 +244,12 @@ function composeChildName(firstName, lastNameOverride, parentLastName) {
   return `${String(firstName).trim()} ${lastName}`.trim();
 }
 
+// Secret per-member token for email unsubscribe links. Member IDs alone
+// aren't enough — anyone with the join code can see them.
+function generateUnsubscribeToken() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
 function generateAddressId() {
   return 'a_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -263,6 +270,7 @@ function buildMember(member) {
     name: member.name.trim(),
     lastName,
     email: (member.email || '').trim(),
+    unsubscribeToken: generateUnsubscribeToken(),
     // Kept alongside `addresses` (as the first one) for older readers of the blob.
     address: addresses[0] ? addresses[0].address : '',
     addresses,
@@ -454,6 +462,7 @@ async function updateCarpoolDetails(code, details) {
   ['name', 'activityName', 'activityLocation'].forEach((key) => {
     if (details[key] !== undefined) carpool[key] = String(details[key]).trim();
   });
+  if (details.monthlyEmail !== undefined) carpool.monthlyEmail = Boolean(details.monthlyEmail);
   await save(db);
   return carpool;
 }
@@ -497,8 +506,81 @@ async function setMemberAddresses(code, memberId, requesterId, addresses, rideAd
   return { member, carpool };
 }
 
+// Loads carpools about to be emailed — one by code, or every carpool with
+// the monthly email turned on — making sure recurring dates are
+// materialized and every member with an email has an unsubscribe token
+// (members from before tokens existed get one now). One load/save total.
+//
+// `claimUpdateSlot` enforces the owner's one-update-email-per-day limit in
+// the same load/save, so a double tap can't send two.
+const UPDATE_EMAIL_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+async function prepareCarpoolsForEmail({ code, monthlyOnly, claimUpdateSlot } = {}) {
+  const db = await load();
+  const carpools = code ? [getCarpoolOrThrow(db, code)] : Object.values(db.carpools).filter((c) => !monthlyOnly || c.monthlyEmail);
+  let changed = false;
+  if (claimUpdateSlot) {
+    const carpool = carpools[0];
+    const last = carpool.lastUpdateEmailAt ? Date.parse(carpool.lastUpdateEmailAt) : 0;
+    if (Date.now() - last < UPDATE_EMAIL_INTERVAL_MS) {
+      const err = new Error('You can email everyone once a day. Try again later.');
+      err.status = 429;
+      throw err;
+    }
+    carpool.lastUpdateEmailAt = new Date().toISOString();
+    changed = true;
+  }
+  carpools.forEach((carpool) => {
+    if (materializeRecurrence(carpool)) changed = true;
+    carpool.members.forEach((m) => {
+      if (m.email && !m.unsubscribeToken) {
+        m.unsubscribeToken = generateUnsubscribeToken();
+        changed = true;
+      }
+    });
+  });
+  if (changed) await save(db);
+  return carpools;
+}
+
+// Gives the daily update-email slot back (e.g. every email failed), but only
+// if no newer send has claimed it since.
+async function releaseUpdateEmailSlot(code, claimedAt) {
+  const db = await load();
+  const carpool = getCarpoolOrThrow(db, code);
+  if (carpool.lastUpdateEmailAt !== claimedAt) return carpool;
+  carpool.lastUpdateEmailAt = null;
+  await save(db);
+  return carpool;
+}
+
+function tokensMatch(a, b) {
+  const x = Buffer.from(String(a || ''));
+  const y = Buffer.from(String(b || ''));
+  return x.length === y.length && x.length > 0 && crypto.timingSafeEqual(x, y);
+}
+
+// Turns update/monthly emails off (or back on) for one member of one
+// carpool. Requires the secret token from their email's unsubscribe link.
+async function setEmailSubscription(code, memberId, token, subscribed) {
+  const db = await load();
+  const carpool = getCarpoolOrThrow(db, code);
+  const member = carpool.members.find((m) => m.id === memberId);
+  if (!member || !tokensMatch(member.unsubscribeToken, token)) {
+    const err = new Error('This unsubscribe link is invalid or out of date');
+    err.status = 404;
+    throw err;
+  }
+  member.emailOptOut = !subscribed;
+  await save(db);
+  return { carpool, member };
+}
+
 module.exports = {
   getCarpool,
+  prepareCarpoolsForEmail,
+  releaseUpdateEmailSlot,
+  setEmailSubscription,
   updateCarpoolDetails,
   setMemberAddresses,
   createCarpoolWithOwner,

@@ -1,10 +1,13 @@
 const express = require('express');
 const store = require('./store');
-const { buildSchedule } = require('./scheduler');
-const { sendCarpoolSummary } = require('./email');
+const { sendCarpoolSummary, isEmailConfigured } = require('./email');
+const { sendUpdateEmail } = require('./notify');
+const { getEffectiveOwnerId, normalizeMembers, normalizeActivityTimes, getScheduleResult } = require('./normalize');
 
 const app = express();
 app.use(express.json());
+// Unsubscribe confirmations and mail apps' one-click unsubscribe POST forms.
+app.use(express.urlencoded({ extended: false }));
 
 const VALID_DAYS = [0, 1, 2, 3, 4, 5, 6];
 
@@ -90,60 +93,14 @@ function validateMemberInput(body) {
   };
 }
 
-// Carpools created before ownership tracking existed have no stored
-// ownerId — fall back to the first member (always the creator).
-function getEffectiveOwnerId(carpool) {
-  return carpool.ownerId || (carpool.members[0] && carpool.members[0].id) || null;
-}
-
-// Carpools created before the two-leg (there/back) model existed used a
-// single canDriveDays/needsRideDays list — normalize those into "available
-// or needed for both legs" so old data keeps working.
-//
-// Likewise, members from before multiple addresses existed have a single
-// `address` string — expose it as a one-entry `addresses` list. Emails are
-// stripped: the carpool payload is readable by anyone with the join code.
-function normalizeMembers(members) {
-  return members.map(({ email, ...m }) => ({
-    ...m,
-    addresses: m.addresses || (m.address ? [{ id: 'a_legacy', address: m.address }] : []),
-    rideAddresses: m.rideAddresses || { there: {}, back: {} },
-    canDriveThereDays: m.canDriveThereDays || m.canDriveDays || [],
-    canDriveBackDays: m.canDriveBackDays || m.canDriveDays || [],
-    children: (m.children || []).map((c) => ({
-      ...c,
-      needsRideThereDays: c.needsRideThereDays || c.needsRideDays || [],
-      needsRideBackDays: c.needsRideBackDays || c.needsRideDays || [],
-    })),
-  }));
-}
-
-// Carpools created before the two-leg time model existed stored a single
-// "date -> HH:MM" map — normalize into the {uniform, perWeekday, perDate}
-// shape, treating the legacy time as both legs' time.
-function normalizeActivityTimes(activityTimes) {
-  if (!activityTimes) return { uniform: {}, perWeekday: {}, perDate: {} };
-  if (activityTimes.uniform !== undefined || activityTimes.perWeekday !== undefined || activityTimes.perDate !== undefined) {
-    return {
-      uniform: activityTimes.uniform || {},
-      perWeekday: activityTimes.perWeekday || {},
-      perDate: activityTimes.perDate || {},
-    };
-  }
-  // Legacy shape: { [date]: "HH:MM" }
-  const perDate = {};
-  Object.entries(activityTimes).forEach(([date, time]) => {
-    if (typeof time === 'string') perDate[date] = { there: time, back: time };
-  });
-  return { uniform: {}, perWeekday: {}, perDate };
-}
-
 function serializeCarpool(carpool) {
   return {
     code: carpool.code,
     name: carpool.name,
     activityName: carpool.activityName || '',
     activityLocation: carpool.activityLocation || '',
+    monthlyEmail: Boolean(carpool.monthlyEmail),
+    lastUpdateEmailAt: carpool.lastUpdateEmailAt || null,
     ownerId: getEffectiveOwnerId(carpool),
     activityDates: carpool.activityDates || [],
     activityTimes: normalizeActivityTimes(carpool.activityTimes),
@@ -153,15 +110,9 @@ function serializeCarpool(carpool) {
   };
 }
 
-function getScheduleResult(carpool) {
-  const todayKey = new Date().toISOString().slice(0, 10);
-  const upcoming = (carpool.activityDates || []).filter((d) => d >= todayKey);
-  return buildSchedule(normalizeMembers(carpool.members), upcoming, carpool.dateOverrides || {}, normalizeActivityTimes(carpool.activityTimes));
-}
-
 function siteUrl(req) {
   if (process.env.URL) return process.env.URL.replace(/\/$/, '');
-  return `https://${req.get('x-forwarded-host') || req.get('host')}`;
+  return `${req.get('x-forwarded-proto') || req.protocol}://${req.get('x-forwarded-host') || req.get('host')}`;
 }
 
 app.post('/api/carpools', async (req, res) => {
@@ -381,6 +332,7 @@ app.patch('/api/carpools/:code/details', async (req, res) => {
       details[key] = String(req.body[key]).trim();
       if (!details[key]) errors.push(`${label} is required`);
     });
+    if (req.body.monthlyEmail !== undefined) details.monthlyEmail = Boolean(req.body.monthlyEmail);
     if (errors.length) return res.status(400).json({ errors });
 
     const updated = await store.updateCarpoolDetails(req.params.code, details);
@@ -414,6 +366,90 @@ app.put('/api/carpools/:code/members/:memberId/addresses', async (req, res) => {
     res.json({ carpool: serializeCarpool(carpool) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
+  }
+});
+
+const MAX_UPDATE_MESSAGE = 2000;
+
+// Owner only, at most once per 24 hours: emails every subscribed member
+// their summary + schedule for the rest of the month, with an optional note
+// from the owner.
+app.post('/api/carpools/:code/email-update', async (req, res) => {
+  try {
+    const carpool = await store.getCarpool(req.params.code);
+    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
+    if (req.body.requesterId !== getEffectiveOwnerId(carpool)) {
+      return res.status(403).json({ errors: ['Only the owner can email the carpool'] });
+    }
+    if (!isEmailConfigured()) {
+      return res.status(503).json({ errors: ["Email sending isn't set up yet"] });
+    }
+    const message = String(req.body.message || '').trim();
+    if (message.length > MAX_UPDATE_MESSAGE) {
+      return res.status(400).json({ errors: [`Keep the message under ${MAX_UPDATE_MESSAGE} characters`] });
+    }
+    res.json(await sendUpdateEmail(req.params.code, siteUrl(req), message));
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
+});
+
+// ---- Unsubscribe (linked from every email) ----
+// GET only shows a confirm button: mail scanners prefetch links, so a GET
+// must never change anything. The POST does the work, including mail apps'
+// one-click unsubscribe (body "List-Unsubscribe=One-Click").
+
+function escapeHtml(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function unsubscribePage(title, body, form) {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${escapeHtml(title)}</title><link rel="stylesheet" href="/style.css" /></head>
+<body><div class="page"><div class="site-header"><img src="/img/carpooler-name.svg" alt="Carpooler" class="site-logo-lockup" /></div>
+<div class="card"><h1>${escapeHtml(title)}</h1><p class="subtitle">${body}</p>${form || ''}</div></div></body></html>`;
+}
+
+function subscriptionForm(query, action, label, secondary) {
+  const params = new URLSearchParams({ c: query.c || '', m: query.m || '', t: query.t || '' });
+  return `<form method="post" action="/api/unsubscribe?${escapeHtml(params.toString())}">
+<input type="hidden" name="action" value="${action}" />
+<button type="submit"${secondary ? ' class="secondary"' : ''}>${escapeHtml(label)}</button></form>`;
+}
+
+app.get('/api/unsubscribe', async (req, res) => {
+  try {
+    const carpool = await store.getCarpool(req.query.c);
+    const name = carpool ? escapeHtml(carpool.name) : 'this carpool';
+    res.send(
+      unsubscribePage(
+        'Unsubscribe?',
+        `Stop getting update and monthly schedule emails for <strong>${name}</strong>? You'll still be in the carpool.`,
+        subscriptionForm(req.query, 'unsubscribe', 'Unsubscribe')
+      )
+    );
+  } catch (err) {
+    res.status(500).send(unsubscribePage('Something went wrong', escapeHtml(err.message)));
+  }
+});
+
+app.post('/api/unsubscribe', async (req, res) => {
+  const subscribe = req.body.action === 'resubscribe';
+  try {
+    const { carpool } = await store.setEmailSubscription(req.query.c, req.query.m, req.query.t, subscribe);
+    const name = escapeHtml(carpool.name);
+    res.send(
+      subscribe
+        ? unsubscribePage("You're subscribed", `You'll get update and monthly schedule emails for <strong>${name}</strong> again.`)
+        : unsubscribePage(
+            "You're unsubscribed",
+            `You won't get any more update or monthly schedule emails for <strong>${name}</strong>. You're still in the carpool.`,
+            subscriptionForm(req.query, 'resubscribe', 'Changed your mind? Resubscribe', true)
+          )
+    );
+  } catch (err) {
+    res.status(err.status || 500).send(unsubscribePage("Couldn't update your email settings", escapeHtml(err.message)));
   }
 });
 

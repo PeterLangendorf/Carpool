@@ -93,7 +93,8 @@ input[type="email"],
 select,
 input[type="number"],
 input[type="date"],
-input[type="time"] {
+input[type="time"],
+textarea {
   width: 100%;
   font-size: 1rem;
   padding: 12px 14px;
@@ -961,4 +962,9 @@ footer.actions {
   margin-bottom: 8px;
   font-size: 0.85rem;
   font-weight: 600;
+}
+
+textarea {
+  font-family: inherit;
+  resize: vertical;
 }

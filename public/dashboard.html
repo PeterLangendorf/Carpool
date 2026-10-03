@@ -65,6 +65,9 @@
     <button type="button" id="editDetailsBtn" class="action-btn hidden">
       <span class="action-icon">⚽</span><span>Edit activity</span>
     </button>
+    <button type="button" id="emailEveryoneBtn" class="action-btn hidden">
+      <span class="action-icon">✉️</span><span>Email everyone</span>
+    </button>
     <button type="button" id="editDatesBtn" class="action-btn hidden">
       <span class="action-icon">✏️</span><span>Edit dates</span>
     </button>
@@ -118,6 +121,30 @@
     </div>
     <p class="error hidden" id="myAddressesError"></p>
     <button type="button" id="saveMyAddressesBtn">Save addresses</button>
+  </div>
+</div>
+
+<!-- Owner: email everyone overlay -->
+<div class="overlay hidden" id="emailOverlay">
+  <div class="overlay-card">
+    <div class="header-row">
+      <h2>Email everyone</h2>
+      <button type="button" id="closeEmailOverlay" class="ghost overlay-close-btn">Close</button>
+    </div>
+    <p class="subtitle">Each member gets their own copy of the carpool summary and their drives for the rest of the month. Add a note if you like.</p>
+    <div class="field">
+      <label for="emailMessage">Message (optional)</label>
+      <textarea id="emailMessage" rows="4" maxlength="2000" placeholder="e.g. No practice on the 14th — the field is closed."></textarea>
+    </div>
+    <p class="error hidden" id="emailError"></p>
+    <p class="subtitle hidden" id="emailResult"></p>
+    <button type="button" id="sendEmailBtn">Send email</button>
+    <p class="field-help" id="emailLimitNote">You can email everyone once a day.</p>
+    <label class="same-lastname-check" for="monthlyEmailToggle">
+      <input type="checkbox" id="monthlyEmailToggle" />
+      Also email everyone their schedule on the 1st of each month
+    </label>
+    <p class="field-help">Members who unsubscribed (via the link in any email) won't get these.</p>
   </div>
 </div>
 

@@ -36,6 +36,13 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   `connectLambda(event)` before touching the store — Netlify only auto-injects Blobs'
   site/token context for its native function signature, not for the classic `(event, context)`
   shape `serverless-http` produces, so this has to be wired up manually.
+- `netlify/functions/monthly-email.mjs` — scheduled function (13:00 UTC on the 1st) that
+  emails members of carpools with `monthlyEmail` on. Uses Netlify's native function format,
+  so Blobs is configured automatically (no `connectLambda`).
+- `src/normalize.js` — read-side helpers shared by the API and the email jobs
+  (`normalizeMembers`, `normalizeActivityTimes`, `getEffectiveOwnerId`, `getScheduleResult`).
+- `src/email.js` (builds/sends emails via Resend) and `src/notify.js` (emails a whole
+  carpool: the owner's "Email everyone" update and the monthly schedule).
 - `src/store.js` — the entire persistence layer, backed by Netlify Blobs (a single JSON blob
   holding the whole `{ carpools: {...} }` document, read-modify-written on every call — no
   in-memory cache, no transactions/locking, so concurrent writes are last-write-wins). Owns
@@ -91,9 +98,18 @@ There is no long-running server process — see `netlify.toml` for the redirect 
 - **Carpools have `activityName` / `activityLocation`**; the location is the end of every
   drop-off route and the start of every pick-up route in the dashboard's route overlay.
   The owner edits them (and the carpool name) via `PATCH /api/carpools/:code/details`.
-- **Summary email** (`src/email.js`): sent on create and join via Resend's HTTP API, only
-  when the `RESEND_API_KEY` and `EMAIL_FROM` env vars are set (otherwise a silent no-op).
-  Member emails are stored but stripped from every API response by `normalizeMembers`.
+- **Emails** (`src/email.js`): welcome (on create/join), owner update (`POST
+  .../email-update`, optional message), and monthly — all the same per-member layout:
+  carpool details plus a table of the member's drives for
+  the rest of the month (stops in route order with Apple Maps links, built from the same
+  schedule + ride-address logic as the dashboard's route overlay). Sent on create and join
+  via Resend's HTTP API, only when the `RESEND_API_KEY` and `EMAIL_FROM` env vars are set
+  (otherwise a silent no-op).
+  Every email has an unsubscribe link (`/api/unsubscribe?c=&m=&t=`, plus RFC 8058
+  one-click headers) authorized by a secret per-member `unsubscribeToken`; GET only shows a
+  confirm button (link scanners prefetch), POST sets `member.emailOptOut`, which update and
+  monthly emails skip. Emails and tokens are stripped from every API response by
+  `normalizeMembers`.
 - **Authorization is requester-ID based, not session-based**: mutating endpoints take a
   `requesterId` in the body and compare it against the target member/owner ID — there's no
   auth token or cookie session. `code` uniquely identifies a carpool; `store.normalizeCode`

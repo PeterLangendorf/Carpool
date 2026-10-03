@@ -208,7 +208,7 @@ function unlockBodyScroll() {
   }
 }
 
-['membersOverlay', 'leaveConfirmOverlay', 'dateEditorOverlay', 'routeOverlay', 'myChildrenOverlay', 'timePickerOverlay', 'myAddressesOverlay', 'detailsOverlay'].forEach((id) => {
+['membersOverlay', 'leaveConfirmOverlay', 'dateEditorOverlay', 'routeOverlay', 'myChildrenOverlay', 'timePickerOverlay', 'myAddressesOverlay', 'detailsOverlay', 'emailOverlay'].forEach((id) => {
   const el = document.getElementById(id);
   el.addEventListener(
     'touchmove',
@@ -828,6 +828,7 @@ function renderAll() {
   document.getElementById('whoami').textContent = `Signed in as ${identity.name}`;
   document.getElementById('editDatesBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
   document.getElementById('editDetailsBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
+  document.getElementById('emailEveryoneBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
   renderStats();
   renderProblems();
   renderDatesStatus();
@@ -1241,6 +1242,86 @@ document.getElementById('saveMyAddressesBtn').addEventListener('click', async ()
     showError(errorEl, err.message);
   } finally {
     btn.disabled = false;
+  }
+});
+
+// ---- Owner: email everyone overlay ----
+
+const UPDATE_EMAIL_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+// Mirrors the server's one-update-email-per-day limit so the owner sees when
+// they can send next instead of hitting an error.
+function renderEmailLimit() {
+  const last = carpool.lastUpdateEmailAt ? Date.parse(carpool.lastUpdateEmailAt) : 0;
+  const nextAt = last + UPDATE_EMAIL_INTERVAL_MS;
+  const waiting = Date.now() < nextAt;
+  document.getElementById('sendEmailBtn').disabled = waiting;
+  document.getElementById('emailLimitNote').textContent = waiting
+    ? `You can email everyone once a day. Next email available ${new Date(nextAt).toLocaleString(undefined, {
+        weekday: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+      })}.`
+    : 'You can email everyone once a day.';
+}
+
+function openEmailOverlay() {
+  showError(document.getElementById('emailError'), '');
+  document.getElementById('emailResult').classList.add('hidden');
+  renderEmailLimit();
+  document.getElementById('monthlyEmailToggle').checked = Boolean(carpool.monthlyEmail);
+  document.getElementById('emailOverlay').classList.remove('hidden');
+  lockBodyScroll();
+}
+
+function dismissEmailOverlay() {
+  document.getElementById('emailOverlay').classList.add('hidden');
+  unlockBodyScroll();
+}
+
+document.getElementById('emailEveryoneBtn').addEventListener('click', openEmailOverlay);
+document.getElementById('closeEmailOverlay').addEventListener('click', dismissEmailOverlay);
+
+document.getElementById('sendEmailBtn').addEventListener('click', async () => {
+  const errorEl = document.getElementById('emailError');
+  const resultEl = document.getElementById('emailResult');
+  const btn = document.getElementById('sendEmailBtn');
+  showError(errorEl, '');
+  resultEl.classList.add('hidden');
+  btn.disabled = true;
+  try {
+    const { sent, skipped, failed, lastUpdateEmailAt } = await api(`/api/carpools/${encodeURIComponent(code)}/email-update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: identity.id, message: document.getElementById('emailMessage').value }),
+    });
+    const parts = [`Sent to ${sent} member${sent === 1 ? '' : 's'}.`];
+    if (skipped) parts.push(`${skipped} skipped (no email on file or unsubscribed).`);
+    if (failed) parts.push(`${failed} couldn't be sent — try again later.`);
+    resultEl.textContent = parts.join(' ');
+    resultEl.classList.remove('hidden');
+    if (!failed) document.getElementById('emailMessage').value = '';
+    carpool.lastUpdateEmailAt = lastUpdateEmailAt;
+  } catch (err) {
+    showError(errorEl, err.message);
+  } finally {
+    btn.disabled = false;
+    renderEmailLimit();
+  }
+});
+
+document.getElementById('monthlyEmailToggle').addEventListener('change', async (e) => {
+  const errorEl = document.getElementById('emailError');
+  showError(errorEl, '');
+  try {
+    carpool = await api(`/api/carpools/${encodeURIComponent(code)}/details`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: identity.id, monthlyEmail: e.target.checked }),
+    });
+  } catch (err) {
+    e.target.checked = !e.target.checked;
+    showError(errorEl, err.message);
   }
 });
 

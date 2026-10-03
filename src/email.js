@@ -161,7 +161,7 @@ function drivesText(rows) {
   ];
 }
 
-function buildSummary(carpool, member, siteUrl, scheduleInfo) {
+function buildSummary(carpool, member, siteUrl, scheduleInfo, options = {}) {
   const drives = scheduleInfo ? drivesThisMonth(carpool, member, scheduleInfo.schedule, scheduleInfo.members) : null;
   const link = `${siteUrl}/?code=${encodeURIComponent(carpool.code)}&tab=join`;
   const riders = (member.children || []).map((c) => c.name);
@@ -186,23 +186,48 @@ function buildSummary(carpool, member, siteUrl, scheduleInfo) {
   }
   const filled = rows.filter(([, v]) => v);
 
-  const subject = `Your carpool: ${carpool.name} (code ${carpool.code})`;
+  const kind = options.kind || 'welcome';
+  const ownerNote = kind === 'update' && options.message ? options.message.trim() : '';
+  const fromName = options.fromName || 'The organizer';
+  const unsubscribe = unsubscribeUrl(carpool, member, siteUrl);
+
+  const subject = {
+    welcome: `Your carpool: ${carpool.name} (code ${carpool.code})`,
+    update: `Update from ${fromName}: ${carpool.name}`,
+    monthly: `Your ${monthName()} carpool schedule: ${carpool.name}`,
+  }[kind];
+  const intro = {
+    welcome: `Here's a summary of your carpool "${carpool.name}".`,
+    update: `${fromName} sent an update about your carpool "${carpool.name}".`,
+    monthly: `Here's your ${monthName()} schedule for your carpool "${carpool.name}".`,
+  }[kind];
+  const footer = `You're getting this because you're in the "${carpool.name}" carpool.`;
+
   const text = [
     `Hi ${member.name},`,
     '',
-    `Here's a summary of your carpool "${carpool.name}".`,
+    intro,
+    ...(ownerNote ? ['', `Message from ${fromName}:`, ownerNote] : []),
     '',
     ...filled.map(([k, v]) => `${k}: ${v}`),
     '',
     ...(drives ? [...drivesText(drives), ''] : []),
     `Share the join code ${carpool.code} with others in your carpool, or send them this link:`,
     link,
+    '',
+    footer,
+    ...(unsubscribe ? [`Unsubscribe from update and monthly emails: ${unsubscribe}`] : []),
   ].join('\n');
 
   const html = `
     <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#14161a;background:#ffffff;padding:20px;border-radius:12px;max-width:560px">
       <p>Hi ${escapeHtml(member.name)},</p>
-      <p>Here's a summary of your carpool <strong>${escapeHtml(carpool.name)}</strong>.</p>
+      <p>${escapeHtml(intro)}</p>
+      ${
+        ownerNote
+          ? `<div style="background:#f0f8ff;border:1px solid #9fd3f5;border-radius:12px;padding:12px 14px;margin:0 0 16px"><div style="font-size:12px;color:#6b7280;margin-bottom:4px">Message from ${escapeHtml(fromName)}</div><div style="white-space:pre-wrap">${escapeHtml(ownerNote)}</div></div>`
+          : ''
+      }
       <p style="font-family:Menlo,monospace;font-size:28px;font-weight:700;letter-spacing:4px;text-align:center;padding:14px;border:2px dashed #0ea5e9;border-radius:12px;background:#eaf4fc">${escapeHtml(carpool.code)}</p>
       <table style="border-collapse:collapse;font-size:14px">
         ${filled
@@ -214,36 +239,58 @@ function buildSummary(carpool, member, siteUrl, scheduleInfo) {
       </table>
       ${drives ? drivesHtml(drives) : ''}
       <p>Share the join code with others in your carpool, or send them this link:<br><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p>
+      <p style="font-size:12px;color:#6b7280;border-top:1px solid #d3e6f7;padding-top:12px;margin-top:20px">
+        ${escapeHtml(footer)}
+        ${unsubscribe ? `<br><a href="${escapeHtml(unsubscribe)}" style="color:#6b7280">Unsubscribe</a> from update and monthly emails.` : ''}
+      </p>
     </div>
   `;
 
-  return { subject, text, html };
+  // Lets mail apps show their own one-click "Unsubscribe" button (RFC 8058).
+  const headers = unsubscribe
+    ? { 'List-Unsubscribe': `<${unsubscribe}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' }
+    : undefined;
+
+  return { subject, text, html, headers };
+}
+
+function unsubscribeUrl(carpool, member, siteUrl) {
+  if (!member.unsubscribeToken) return null;
+  const params = new URLSearchParams({ c: carpool.code, m: member.id, t: member.unsubscribeToken });
+  return `${siteUrl}/api/unsubscribe?${params}`;
 }
 
 function isEmailConfigured() {
   return Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM);
 }
 
+async function resendRequest(path, body) {
+  const res = await fetch(`https://api.resend.com${path}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Resend ${res.status}: ${await res.text().catch(() => '')}`);
+}
+
+// Builds one ready-to-send email. `member` is the stored member (it needs
+// `email` and `unsubscribeToken`); `scheduleInfo` ({ schedule, members },
+// members normalized) adds their drives for the rest of the month.
+// `options`: { kind: 'welcome' | 'update' | 'monthly', message, fromName }.
+function buildEmail(carpool, member, siteUrl, scheduleInfo, options) {
+  const { subject, text, html, headers } = buildSummary(carpool, member, siteUrl, scheduleInfo, options);
+  return { from: process.env.EMAIL_FROM, to: [member.email], subject, text, html, ...(headers ? { headers } : {}) };
+}
+
 // Resolves to true if the email was accepted for delivery. Never throws — a
 // failed email must not fail the carpool create/join that triggered it.
-// `scheduleInfo` ({ schedule, members }, members normalized) adds the
-// member's drives for the rest of the month.
 async function sendCarpoolSummary(to, carpool, member, siteUrl, scheduleInfo) {
   if (!to || !isEmailConfigured()) return false;
-  const { subject, text, html } = buildSummary(carpool, member, siteUrl, scheduleInfo);
   try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ from: process.env.EMAIL_FROM, to: [to], subject, text, html }),
-    });
-    if (!res.ok) {
-      console.error('Summary email failed:', res.status, await res.text().catch(() => ''));
-      return false;
-    }
+    await resendRequest('/emails', buildEmail(carpool, member, siteUrl, scheduleInfo, { kind: 'welcome' }));
     return true;
   } catch (err) {
     console.error('Summary email failed:', err);
@@ -251,4 +298,22 @@ async function sendCarpoolSummary(to, carpool, member, siteUrl, scheduleInfo) {
   }
 }
 
-module.exports = { sendCarpoolSummary };
+// Sends many emails via Resend's batch endpoint (up to 100 per request).
+// Returns how many were accepted; logs and skips any batch that fails.
+const BATCH_SIZE = 100;
+
+async function sendEmails(emails) {
+  let sent = 0;
+  for (let i = 0; i < emails.length; i += BATCH_SIZE) {
+    const batch = emails.slice(i, i + BATCH_SIZE);
+    try {
+      await resendRequest('/emails/batch', batch);
+      sent += batch.length;
+    } catch (err) {
+      console.error('Batch email failed:', err);
+    }
+  }
+  return sent;
+}
+
+module.exports = { sendCarpoolSummary, buildEmail, sendEmails, isEmailConfigured };

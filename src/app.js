@@ -406,7 +406,7 @@ function escapeHtml(value) {
 function unsubscribePage(title, body, form) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escapeHtml(title)}</title><link rel="stylesheet" href="/style.css" /></head>
+<title>${escapeHtml(title)}</title><link rel="icon" href="/img/app-icon.svg" type="image/svg+xml" /><link rel="stylesheet" href="/style.css" /></head>
 <body><div class="page"><div class="site-header"><img src="/img/carpooler-name.svg" alt="Carpooler" class="site-logo-lockup" /></div>
 <div class="card"><h1>${escapeHtml(title)}</h1><p class="subtitle">${body}</p>${form || ''}</div></div></body></html>`;
 }

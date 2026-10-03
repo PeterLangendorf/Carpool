@@ -24,9 +24,20 @@ function getCheckedDays(container) {
   return Array.from(container.querySelectorAll('input:checked')).map((el) => Number(el.value));
 }
 
-// ---- Leg-day-picker: one row per active weekday, with There/Back checkboxes ----
+// ---- Leg-day-picker: one row per active weekday, with Drop off/Pick up checkboxes ----
 
-function renderLegDayPicker(container, weekdays, timeResolver, selected) {
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// `addresses` (optional): when the member has more than one, each checked
+// ride gets a dropdown to pick which address it starts/ends at.
+// `selected.thereAddresses` / `backAddresses` map weekday -> address index.
+function renderLegDayPicker(container, weekdays, timeResolver, selected, addresses) {
   container.innerHTML = '';
   if (!weekdays || !weekdays.length) {
     container.innerHTML = '<p class="subtitle">No active days yet.</p>';
@@ -34,21 +45,40 @@ function renderLegDayPicker(container, weekdays, timeResolver, selected) {
   }
   const selThere = new Set((selected && selected.thereDays) || []);
   const selBack = new Set((selected && selected.backDays) || []);
+  const showAddresses = addresses && addresses.length > 1;
+  const legOptions = (leg, w) => {
+    const chosen = (selected && selected[`${leg}Addresses`] && selected[`${leg}Addresses`][w]) || 0;
+    return addresses
+      .map((a, i) => `<option value="${i}" ${i === chosen ? 'selected' : ''}>${escapeHtml(a)}</option>`)
+      .join('');
+  };
+  const legColumn = (leg, w, label, checked) => `
+    <div class="leg-col">
+      <label class="leg-check"><input type="checkbox" data-leg="${leg}" data-weekday="${w}" ${checked ? 'checked' : ''} /><span>${label}</span></label>
+      ${
+        showAddresses
+          ? `<select class="leg-address${checked ? '' : ' hidden'}" data-leg-address="${leg}" data-weekday="${w}" aria-label="${leg === 'there' ? 'Pick up from' : 'Drop off at'}">${legOptions(leg, w)}</select>`
+          : ''
+      }
+    </div>
+  `;
   weekdays.forEach((w) => {
     const times = timeResolver ? timeResolver(w) : null;
-    const thereLabel = times && times.there ? `There · ${formatTimeShort(times.there)}` : 'There';
-    const backLabel = times && times.back ? `Back · ${formatTimeShort(times.back)}` : 'Back';
-    const thereChecked = selThere.has(w);
-    const backChecked = selBack.has(w);
+    const thereLabel = times && times.there ? `Drop off · ${formatTimeShort(times.there)}` : 'Drop off';
+    const backLabel = times && times.back ? `Pick up · ${formatTimeShort(times.back)}` : 'Pick up';
     const row = document.createElement('div');
     row.className = 'leg-day-row';
     row.innerHTML = `
       <div class="leg-day-name">${FULL_DAY_LABELS[w]}</div>
       <div class="leg-day-checks">
-        <label class="leg-check"><input type="checkbox" data-leg="there" data-weekday="${w}" ${thereChecked ? 'checked' : ''} /><span>${thereLabel}</span></label>
-        <label class="leg-check"><input type="checkbox" data-leg="back" data-weekday="${w}" ${backChecked ? 'checked' : ''} /><span>${backLabel}</span></label>
+        ${legColumn('there', w, thereLabel, selThere.has(w))}
+        ${legColumn('back', w, backLabel, selBack.has(w))}
       </div>
     `;
+    row.querySelectorAll('input[data-leg]').forEach((input) => {
+      const select = row.querySelector(`select[data-leg-address="${input.dataset.leg}"]`);
+      if (select) input.addEventListener('change', () => select.classList.toggle('hidden', !input.checked));
+    });
     container.appendChild(row);
   });
 }
@@ -56,7 +86,15 @@ function renderLegDayPicker(container, weekdays, timeResolver, selected) {
 function getLegDaySelection(container) {
   const thereDays = Array.from(container.querySelectorAll('input[data-leg="there"]:checked')).map((el) => Number(el.dataset.weekday));
   const backDays = Array.from(container.querySelectorAll('input[data-leg="back"]:checked')).map((el) => Number(el.dataset.weekday));
-  return { thereDays, backDays };
+  const addressesFor = (leg, days) => {
+    const out = {};
+    days.forEach((w) => {
+      const select = container.querySelector(`select[data-leg-address="${leg}"][data-weekday="${w}"]`);
+      out[w] = select ? Number(select.value) : 0;
+    });
+    return out;
+  };
+  return { thereDays, backDays, thereAddresses: addressesFor('there', thereDays), backAddresses: addressesFor('back', backDays) };
 }
 
 // Mirrors src/store.js's resolveActivityTimes: most-specific override wins
@@ -123,10 +161,10 @@ function addChildRow(container, key) {
   const hideLastName = isSameLastNameChecked(key);
   row.innerHTML = `
     <div class="child-row-main">
-      <input type="text" class="child-name-input" id="${nameFieldId}" name="${nameFieldId}" placeholder="Child's first name" autocomplete="off" autocapitalize="words" />
-      <button type="button" class="remove-child-btn" aria-label="Remove child">×</button>
+      <input type="text" class="child-name-input" id="${nameFieldId}" name="${nameFieldId}" placeholder="Rider's first name" autocomplete="off" autocapitalize="words" />
+      <button type="button" class="remove-child-btn" aria-label="Remove rider">×</button>
     </div>
-    <input type="text" class="child-lastname-input${hideLastName ? ' hidden' : ''}" id="${lastNameFieldId}" name="${lastNameFieldId}" placeholder="Child's last name" autocomplete="off" autocapitalize="words" />
+    <input type="text" class="child-lastname-input${hideLastName ? ' hidden' : ''}" id="${lastNameFieldId}" name="${lastNameFieldId}" placeholder="Rider's last name" autocomplete="off" autocapitalize="words" />
   `;
   row.querySelector('.remove-child-btn').addEventListener('click', () => row.remove());
   container.appendChild(row);
@@ -158,6 +196,42 @@ document.querySelectorAll('[data-same-lastname]').forEach((checkbox) => {
     });
   });
 });
+
+// ---- Address list: same add/remove-row pattern as the rider list ----
+
+let addressRowCounter = 0;
+
+function addAddressRow(container) {
+  const row = document.createElement('div');
+  row.className = 'child-row';
+  const fieldId = `address-${addressRowCounter++}`;
+  row.innerHTML = `
+    <div class="child-row-main">
+      <input type="text" class="child-name-input address-input" id="${fieldId}" name="${fieldId}" placeholder="e.g. 123 Main St" autocomplete="street-address" />
+      <button type="button" class="remove-child-btn" aria-label="Remove address">×</button>
+    </div>
+  `;
+  row.querySelector('.remove-child-btn').addEventListener('click', () => {
+    // Always leave at least one row to type into.
+    if (container.querySelectorAll('.child-row').length > 1) row.remove();
+    else row.querySelector('.address-input').value = '';
+  });
+  container.appendChild(row);
+}
+
+function getAddressEntries(container) {
+  return Array.from(container.querySelectorAll('.address-input'))
+    .map((input) => input.value.trim())
+    .filter(Boolean);
+}
+
+document.querySelectorAll('[data-add-address]').forEach((btn) => {
+  const container = document.querySelector(`[data-addresslist="${btn.dataset.addAddress}"]`);
+  addAddressRow(container);
+  btn.addEventListener('click', () => addAddressRow(container));
+});
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function showError(el, message) {
   el.textContent = message;
@@ -317,11 +391,13 @@ document.getElementById('joinCodeForm').addEventListener('submit', (e) => {
 const joinWizard = {
   firstName: '',
   lastName: '',
-  address: '',
+  email: '',
+  addresses: [],
   seats: '',
   children: [],
   needsRideThereDays: [],
   needsRideBackDays: [],
+  rideAddresses: { there: {}, back: {} }, // weekday -> index into `addresses`
   canDriveThereDays: [],
   canDriveBackDays: [],
 };
@@ -335,20 +411,13 @@ document.querySelector('[data-step-form="join-new-name"]').addEventListener('sub
   const errorEl = document.getElementById('joinNewNameError');
   const firstName = document.getElementById('joinNewFirstName').value.trim();
   const lastName = document.getElementById('joinNewLastName').value.trim();
+  const email = document.getElementById('joinNewEmail').value.trim();
   if (!firstName || !lastName) return showError(errorEl, 'Please enter your first and last name');
+  if (!EMAIL_RE.test(email)) return showError(errorEl, 'Please enter a valid email address');
   showError(errorEl, '');
   joinWizard.firstName = firstName;
   joinWizard.lastName = lastName;
-  showScreen('join-new-address');
-});
-
-document.querySelector('[data-step-form="join-new-address"]').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const errorEl = document.getElementById('joinNewAddressError');
-  const address = document.getElementById('joinNewAddress').value.trim();
-  if (!address) return showError(errorEl, 'Please enter your address');
-  showError(errorEl, '');
-  joinWizard.address = address;
+  joinWizard.email = email;
   showScreen('join-new-seats');
 });
 
@@ -364,18 +433,43 @@ document.querySelector('[data-step-form="join-new-seats"]').addEventListener('su
   showScreen('join-new-children');
 });
 
+// Addresses are only for picking up/dropping off riders, so a driver-only
+// member skips that screen (and the ride-days screen) entirely.
 document.querySelector('[data-step-form="join-new-children"]').addEventListener('submit', (e) => {
   e.preventDefault();
   joinWizard.children = getChildEntries(document.querySelector('[data-childlist="joinNew"]'));
+  if (joinWizard.children.length > 0) {
+    showScreen('join-new-address');
+  } else {
+    joinWizard.addresses = [];
+    goToJoinDaysStep();
+  }
+});
+
+document.querySelector('[data-step-form="join-new-address"]').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById('joinNewAddressError');
+  const addresses = getAddressEntries(document.querySelector('[data-addresslist="joinNew"]'));
+  if (!addresses.length) return showError(errorEl, 'Please enter at least one address');
+  showError(errorEl, '');
+  joinWizard.addresses = addresses;
   goToJoinDaysStep();
 });
 
 function goToJoinDaysStep() {
   if (joinWizard.children.length > 0) {
-    renderLegDayPicker(document.getElementById('joinNewRideList'), joinedActiveWeekdays, joinedTimeResolver, {
-      thereDays: joinWizard.needsRideThereDays,
-      backDays: joinWizard.needsRideBackDays,
-    });
+    renderLegDayPicker(
+      document.getElementById('joinNewRideList'),
+      joinedActiveWeekdays,
+      joinedTimeResolver,
+      {
+        thereDays: joinWizard.needsRideThereDays,
+        backDays: joinWizard.needsRideBackDays,
+        thereAddresses: joinWizard.rideAddresses.there,
+        backAddresses: joinWizard.rideAddresses.back,
+      },
+      joinWizard.addresses
+    );
     showScreen('join-new-needsride');
   } else {
     renderLegDayPicker(document.getElementById('joinNewDriveList'), joinedActiveWeekdays, joinedTimeResolver, {
@@ -388,9 +482,10 @@ function goToJoinDaysStep() {
 
 document.querySelector('[data-step-form="join-new-needsride"]').addEventListener('submit', (e) => {
   e.preventDefault();
-  const { thereDays, backDays } = getLegDaySelection(document.getElementById('joinNewRideList'));
+  const { thereDays, backDays, thereAddresses, backAddresses } = getLegDaySelection(document.getElementById('joinNewRideList'));
   joinWizard.needsRideThereDays = thereDays;
   joinWizard.needsRideBackDays = backDays;
+  joinWizard.rideAddresses = { there: thereAddresses, back: backAddresses };
   renderLegDayPicker(
     document.getElementById('joinNewDriveList'),
     joinedActiveWeekdays,
@@ -401,7 +496,7 @@ document.querySelector('[data-step-form="join-new-needsride"]').addEventListener
 });
 
 document.getElementById('backFromJoinNeedsRide').addEventListener('click', () => {
-  showScreen('join-new-children');
+  showScreen('join-new-address');
 });
 
 document.getElementById('backFromJoinCanDrive').addEventListener('click', () => {
@@ -411,6 +506,7 @@ document.getElementById('backFromJoinCanDrive').addEventListener('click', () => 
 document.querySelector('[data-step-form="join-new-candrive"]').addEventListener('submit', async (e) => {
   e.preventDefault();
   const errorEl = document.getElementById('joinNewCanDriveError');
+  const submitBtn = document.getElementById('joinCarpoolSubmit');
   const { thereDays, backDays } = getLegDaySelection(document.getElementById('joinNewDriveList'));
   showError(errorEl, '');
   joinWizard.canDriveThereDays = thereDays;
@@ -422,6 +518,7 @@ document.querySelector('[data-step-form="join-new-candrive"]').addEventListener(
     needsRideBackDays: joinWizard.needsRideBackDays,
   }));
 
+  submitBtn.disabled = true;
   try {
     const data = await api(`/api/carpools/${encodeURIComponent(joinedCode)}/members`, {
       method: 'POST',
@@ -429,7 +526,9 @@ document.querySelector('[data-step-form="join-new-candrive"]').addEventListener(
       body: JSON.stringify({
         firstName: joinWizard.firstName,
         lastName: joinWizard.lastName,
-        address: joinWizard.address,
+        email: joinWizard.email,
+        addresses: joinWizard.addresses,
+        rideAddresses: joinWizard.rideAddresses,
         seats: joinWizard.seats,
         canDriveThereDays: joinWizard.canDriveThereDays,
         canDriveBackDays: joinWizard.canDriveBackDays,
@@ -440,6 +539,7 @@ document.querySelector('[data-step-form="join-new-candrive"]').addEventListener(
     rememberCarpool(joinedCode, joinedCarpoolName);
     goToDashboard(joinedCode);
   } catch (err) {
+    submitBtn.disabled = false;
     showError(errorEl, err.message);
   }
 });
@@ -449,9 +549,12 @@ const wizard = {
   carpoolName: '',
   firstName: '',
   lastName: '',
-  address: '',
+  email: '',
+  addresses: [],
   seats: '',
   children: [],
+  activityName: '',
+  activityLocation: '',
   dateMode: null, // 'recurring' | 'specific'
   activityDates: [], // materialized dates for 'specific' mode; empty for 'recurring' (server materializes)
   activeWeekdays: [], // Sun-Sat sorted weekdays the activity is active on
@@ -461,6 +564,7 @@ const wizard = {
   lastTimesScreen: null,
   needsRideThereDays: [],
   needsRideBackDays: [],
+  rideAddresses: { there: {}, back: {} }, // weekday -> index into `addresses`
   canDriveThereDays: [],
   canDriveBackDays: [],
 };
@@ -473,10 +577,18 @@ function wizardTimeResolver(weekday) {
 
 function goToDaysStep() {
   if (wizard.children.length > 0) {
-    renderLegDayPicker(document.getElementById('createNeedsRideList'), wizard.activeWeekdays, wizardTimeResolver, {
-      thereDays: wizard.needsRideThereDays,
-      backDays: wizard.needsRideBackDays,
-    });
+    renderLegDayPicker(
+      document.getElementById('createNeedsRideList'),
+      wizard.activeWeekdays,
+      wizardTimeResolver,
+      {
+        thereDays: wizard.needsRideThereDays,
+        backDays: wizard.needsRideBackDays,
+        thereAddresses: wizard.rideAddresses.there,
+        backAddresses: wizard.rideAddresses.back,
+      },
+      wizard.addresses
+    );
     showScreen('create-needsride');
   } else {
     renderLegDayPicker(document.getElementById('createCanDriveList'), wizard.activeWeekdays, wizardTimeResolver, {
@@ -489,7 +601,11 @@ function goToDaysStep() {
 
 document.querySelector('[data-step-form="create-name"]').addEventListener('submit', (e) => {
   e.preventDefault();
-  wizard.carpoolName = document.getElementById('createCarpoolName').value.trim();
+  const errorEl = document.getElementById('createNameError');
+  const carpoolName = document.getElementById('createCarpoolName').value.trim();
+  if (!carpoolName) return showError(errorEl, 'Please name your carpool');
+  showError(errorEl, '');
+  wizard.carpoolName = carpoolName;
   showScreen('create-yourname');
 });
 
@@ -498,20 +614,13 @@ document.querySelector('[data-step-form="create-yourname"]').addEventListener('s
   const errorEl = document.getElementById('createYourNameError');
   const firstName = document.getElementById('createFirstName').value.trim();
   const lastName = document.getElementById('createLastName').value.trim();
+  const email = document.getElementById('createEmail').value.trim();
   if (!firstName || !lastName) return showError(errorEl, 'Please enter your first and last name');
+  if (!EMAIL_RE.test(email)) return showError(errorEl, 'Please enter a valid email address');
   showError(errorEl, '');
   wizard.firstName = firstName;
   wizard.lastName = lastName;
-  showScreen('create-address');
-});
-
-document.querySelector('[data-step-form="create-address"]').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const errorEl = document.getElementById('createAddressError');
-  const address = document.getElementById('createAddress').value.trim();
-  if (!address) return showError(errorEl, 'Please enter your address');
-  showError(errorEl, '');
-  wizard.address = address;
+  wizard.email = email;
   showScreen('create-seats');
 });
 
@@ -527,10 +636,44 @@ document.querySelector('[data-step-form="create-seats"]').addEventListener('subm
   showScreen('create-children');
 });
 
+// Addresses are only for picking up/dropping off riders, so an organizer
+// who's only driving skips straight to the activity details.
 document.querySelector('[data-step-form="create-children"]').addEventListener('submit', (e) => {
   e.preventDefault();
   wizard.children = getChildEntries(document.querySelector('[data-childlist="create"]'));
+  if (wizard.children.length > 0) {
+    showScreen('create-address');
+  } else {
+    wizard.addresses = [];
+    showScreen('create-activity');
+  }
+});
+
+document.querySelector('[data-step-form="create-address"]').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById('createAddressError');
+  const addresses = getAddressEntries(document.querySelector('[data-addresslist="create"]'));
+  if (!addresses.length) return showError(errorEl, 'Please enter at least one address');
+  showError(errorEl, '');
+  wizard.addresses = addresses;
+  showScreen('create-activity');
+});
+
+document.querySelector('[data-step-form="create-activity"]').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById('createActivityError');
+  const activityName = document.getElementById('createActivityName').value.trim();
+  const activityLocation = document.getElementById('createActivityLocation').value.trim();
+  if (!activityName) return showError(errorEl, 'Please enter the name of the activity');
+  if (!activityLocation) return showError(errorEl, 'Please enter where the activity takes place');
+  showError(errorEl, '');
+  wizard.activityName = activityName;
+  wizard.activityLocation = activityLocation;
   showScreen('create-datetype');
+});
+
+document.getElementById('backFromActivity').addEventListener('click', () => {
+  showScreen(wizard.children.length > 0 ? 'create-address' : 'create-children');
 });
 
 // ---- Create flow: activity date type ----
@@ -557,7 +700,7 @@ document.querySelector('[data-step-form="create-dates-recurring"]').addEventList
 
   if (weekdays.length === 0) return showError(errorEl, 'Pick at least one weekday');
   if (!startDate) return showError(errorEl, 'Pick a start date');
-  if (!endless && !endDate) return showError(errorEl, 'Pick an end date, or check "recurs endlessly"');
+  if (!endless && !endDate) return showError(errorEl, 'Pick an end date, or check "repeats with no end date"');
   if (!endless && endDate < startDate) return showError(errorEl, 'End date must be on or after the start date');
   showError(errorEl, '');
 
@@ -702,11 +845,11 @@ function renderPerWeekdayTimesForm() {
     row.innerHTML = `
       <div class="child-row-main"><strong>${FULL_DAY_LABELS[w]}</strong></div>
       <div class="field">
-        <label>Start time (drop-off)</label>
+        <label>Start time (drop off)</label>
         <input type="time" class="pw-there" value="${existing.there || ''}" />
       </div>
       <div class="field">
-        <label>End time (pickup)</label>
+        <label>End time (pick up)</label>
         <input type="time" class="pw-back" value="${existing.back || ''}" />
       </div>
     `;
@@ -816,13 +959,17 @@ document.getElementById('perDateTimesNextBtn').addEventListener('click', () => {
 function renderWizardSummary() {
   const container = document.getElementById('createSummaryContent');
   const parts = [];
-  parts.push(`<h2>${wizard.carpoolName || '(unnamed carpool)'}</h2>`);
+  parts.push(`<h2>${escapeHtml(wizard.carpoolName)}</h2>`);
   parts.push(
-    `<div class="riders"><strong>You:</strong> ${wizard.firstName} ${wizard.lastName} · ${wizard.address} · drives up to ${wizard.seats} passengers</div>`
+    `<div class="riders"><strong>You:</strong> ${escapeHtml(`${wizard.firstName} ${wizard.lastName}`)} · ${escapeHtml(wizard.email)} · drives up to ${wizard.seats} passengers</div>`
   );
   if (wizard.children.length) {
-    parts.push(`<div class="riders"><strong>Children:</strong> ${wizard.children.map((c) => c.firstName).join(', ')}</div>`);
+    parts.push(`<div class="riders"><strong>Riders:</strong> ${wizard.children.map((c) => escapeHtml(c.firstName)).join(', ')}</div>`);
   }
+  if (wizard.addresses.length) {
+    parts.push(`<div class="riders"><strong>Address${wizard.addresses.length === 1 ? '' : 'es'}:</strong> ${wizard.addresses.map(escapeHtml).join('; ')}</div>`);
+  }
+  parts.push(`<div class="riders"><strong>Activity:</strong> ${escapeHtml(wizard.activityName)} · ${escapeHtml(wizard.activityLocation)}</div>`);
 
   let scheduleText;
   if (wizard.dateMode === 'recurring') {
@@ -840,12 +987,12 @@ function renderWizardSummary() {
 
   let timesText;
   if (wizard.timesMode === 'uniform') {
-    timesText = `${formatTimeShort(wizard.activityTimes.uniform.there)} there / ${formatTimeShort(wizard.activityTimes.uniform.back)} back, every day`;
+    timesText = `${formatTimeShort(wizard.activityTimes.uniform.there)} drop off / ${formatTimeShort(wizard.activityTimes.uniform.back)} pick up, every day`;
   } else if (wizard.dateMode === 'recurring') {
     timesText = wizard.activeWeekdays
       .map((w) => {
         const t = wizard.activityTimes.perWeekday[w] || {};
-        return `${FULL_DAY_LABELS[w]}: ${t.there ? formatTimeShort(t.there) : '?'} / ${t.back ? formatTimeShort(t.back) : '?'}`;
+        return `${FULL_DAY_LABELS[w]}: ${t.there ? formatTimeShort(t.there) : '?'} drop off / ${t.back ? formatTimeShort(t.back) : '?'} pick up`;
       })
       .join('; ');
   } else {
@@ -883,11 +1030,12 @@ document.getElementById('confirmContinueBtn').addEventListener('click', () => {
 document.querySelector('[data-step-form="create-needsride"]').addEventListener('submit', (e) => {
   e.preventDefault();
   const errorEl = document.getElementById('createNeedsRideError');
-  const { thereDays, backDays } = getLegDaySelection(document.getElementById('createNeedsRideList'));
+  const { thereDays, backDays, thereAddresses, backAddresses } = getLegDaySelection(document.getElementById('createNeedsRideList'));
   if (thereDays.length === 0 && backDays.length === 0) return showError(errorEl, 'Pick at least one ride');
   showError(errorEl, '');
   wizard.needsRideThereDays = thereDays;
   wizard.needsRideBackDays = backDays;
+  wizard.rideAddresses = { there: thereAddresses, back: backAddresses };
   renderLegDayPicker(
     document.getElementById('createCanDriveList'),
     wizard.activeWeekdays,
@@ -908,6 +1056,7 @@ document.getElementById('backFromCanDrive').addEventListener('click', () => {
 document.querySelector('[data-step-form="create-candrive"]').addEventListener('submit', async (e) => {
   e.preventDefault();
   const errorEl = document.getElementById('createCanDriveError');
+  const submitBtn = document.getElementById('createCarpoolSubmit');
   const { thereDays, backDays } = getLegDaySelection(document.getElementById('createCanDriveList'));
   if (thereDays.length === 0 && backDays.length === 0) return showError(errorEl, 'Pick at least one day/leg you can drive');
   showError(errorEl, '');
@@ -920,15 +1069,21 @@ document.querySelector('[data-step-form="create-candrive"]').addEventListener('s
     needsRideBackDays: wizard.needsRideBackDays,
   }));
 
+  // Disabled while in flight so a double-tap can't create two carpools.
+  submitBtn.disabled = true;
   try {
     const data = await api('/api/carpools', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         carpoolName: wizard.carpoolName,
+        activityName: wizard.activityName,
+        activityLocation: wizard.activityLocation,
         firstName: wizard.firstName,
         lastName: wizard.lastName,
-        address: wizard.address,
+        email: wizard.email,
+        addresses: wizard.addresses,
+        rideAddresses: wizard.rideAddresses,
         seats: wizard.seats,
         children,
         canDriveThereDays: wizard.canDriveThereDays,
@@ -943,8 +1098,12 @@ document.querySelector('[data-step-form="create-candrive"]').addEventListener('s
 
     rememberCarpool(createdCode, data.carpool.name);
     document.getElementById('createdCode').textContent = createdCode;
+    const emailNote = document.getElementById('createEmailSentNote');
+    emailNote.textContent = `We've emailed a summary to ${wizard.email}.`;
+    emailNote.classList.toggle('hidden', !data.emailSent);
     showScreen('create-success');
   } catch (err) {
+    submitBtn.disabled = false;
     showError(errorEl, err.message);
   }
 });

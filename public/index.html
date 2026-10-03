@@ -74,7 +74,7 @@
   <section class="screen hidden" data-screen="join-new-name">
     <div>
       <h1>Your name</h1>
-      <p class="subtitle"><strong>This is about you, the parent/driver</strong> — not your child.</p>
+      <p class="subtitle"><strong>This is about you, the driver</strong> — not the people who will be riding with you.</p>
     </div>
     <form class="card" data-step-form="join-new-name">
       <p class="error hidden" id="joinNewNameError"></p>
@@ -86,33 +86,21 @@
         <label for="joinNewLastName">Your last name</label>
         <input type="text" id="joinNewLastName" placeholder="e.g. Rivera" autocomplete="family-name" required />
       </div>
+      <div class="field">
+        <label for="joinNewEmail">Your email</label>
+        <input type="email" id="joinNewEmail" placeholder="e.g. jamie@example.com" autocomplete="email" inputmode="email" autocapitalize="off" required />
+        <p class="field-help">We'll email you a summary of the carpool and its code.</p>
+      </div>
       <button type="submit">Next</button>
       <button type="button" class="ghost" data-back="join-members">Back</button>
     </form>
   </section>
 
-  <!-- JOIN: step 3b, address -->
-  <section class="screen hidden" data-screen="join-new-address">
-    <div>
-      <h1>Your address</h1>
-      <p class="subtitle">Used to plan pickup stops when you're driving.</p>
-    </div>
-    <form class="card" data-step-form="join-new-address">
-      <p class="error hidden" id="joinNewAddressError"></p>
-      <div class="field">
-        <label for="joinNewAddress">Address</label>
-        <input type="text" id="joinNewAddress" placeholder="e.g. 123 Main St" autocomplete="street-address" required />
-      </div>
-      <button type="submit">Next</button>
-      <button type="button" class="ghost" data-back="join-new-name">Back</button>
-    </form>
-  </section>
-
-  <!-- JOIN: step 3c, seats -->
+  <!-- JOIN: step 3b, seats -->
   <section class="screen hidden" data-screen="join-new-seats">
     <div>
       <h1>Your car</h1>
-      <p class="subtitle">How many passengers can you drive? (Not counting yourself.)</p>
+      <p class="subtitle">How many passengers can you drive? (Not counting yourself — just seats available for riders.)</p>
     </div>
     <form class="card" data-step-form="join-new-seats">
       <p class="error hidden" id="joinNewSeatsError"></p>
@@ -120,36 +108,54 @@
         <label for="joinNewSeats">Passengers you can drive</label>
         <input type="number" id="joinNewSeats" inputmode="numeric" min="0" max="15" placeholder="e.g. 4" required />
       </div>
+      <p class="field-help">Please ensure that your passenger seats are appropriate for the riders in this carpool and comply with state and federal safety regulations (car seats, airbags, etc.).</p>
       <button type="submit">Next</button>
-      <button type="button" class="ghost" data-back="join-new-address">Back</button>
+      <button type="button" class="ghost" data-back="join-new-name">Back</button>
     </form>
   </section>
 
-  <!-- JOIN: step 3d, children -->
+  <!-- JOIN: step 3c, riders -->
   <section class="screen hidden" data-screen="join-new-children">
     <div>
-      <h1>Your children</h1>
-      <p class="subtitle">Add the kids you'll need rides for. You can skip this.</p>
+      <h1>Your riders</h1>
+      <p class="subtitle">Add the names of anyone you'll need a ride for (including yourself). You can skip this if you will only be driving.</p>
     </div>
     <form class="card" data-step-form="join-new-children">
       <div class="field">
         <label class="same-lastname-check" for="joinNewSameLastName">
           <input type="checkbox" id="joinNewSameLastName" data-same-lastname="joinNew" checked />
-          Children have the same last name as me
+          Riders have the same last name as me
         </label>
         <div class="child-list" data-childlist="joinNew"></div>
-        <button type="button" class="secondary" data-add-child="joinNew">+ Add a child</button>
+        <button type="button" class="secondary" data-add-child="joinNew">+ Add a rider</button>
       </div>
       <button type="submit">Next</button>
       <button type="button" class="ghost" data-back="join-new-seats">Back</button>
     </form>
   </section>
 
+  <!-- JOIN: step 3d, addresses (skipped if no riders) -->
+  <section class="screen hidden" data-screen="join-new-address">
+    <div>
+      <h1>Your addresses</h1>
+      <p class="subtitle">This is where your rider(s) will be picked up before the activity and dropped off after the activity. You can add more than one address (e.g., home, afterschool program, daycare).</p>
+    </div>
+    <form class="card" data-step-form="join-new-address">
+      <p class="error hidden" id="joinNewAddressError"></p>
+      <div class="field">
+        <div class="child-list" data-addresslist="joinNew"></div>
+        <button type="button" class="secondary" data-add-address="joinNew">+ Add an address</button>
+      </div>
+      <button type="submit">Next</button>
+      <button type="button" class="ghost" data-back="join-new-children">Back</button>
+    </form>
+  </section>
+
   <!-- JOIN: step 3e, ride days -->
   <section class="screen hidden" data-screen="join-new-needsride">
     <div>
-      <h1>Ride days</h1>
-      <p class="subtitle">Which days do your kids need a ride, and for which leg?</p>
+      <h1>Carpool rides</h1>
+      <p class="subtitle">When do your riders need a ride from the carpool? (You'll set your availability to drive the carpool on the next screen.)</p>
     </div>
     <form class="card" data-step-form="join-new-needsride">
       <p class="error hidden" id="joinNewNeedsRideError"></p>
@@ -162,13 +168,13 @@
   <!-- JOIN: step 3f, driving days -->
   <section class="screen hidden" data-screen="join-new-candrive">
     <div>
-      <h1>Driving days</h1>
-      <p class="subtitle">Which days can you drive, and for which leg?</p>
+      <h1>Driving the carpool</h1>
+      <p class="subtitle">When are you available to drive the carpool?</p>
     </div>
     <form class="card" data-step-form="join-new-candrive">
       <p class="error hidden" id="joinNewCanDriveError"></p>
       <div id="joinNewDriveList"></div>
-      <button type="submit">Join carpool</button>
+      <button type="submit" id="joinCarpoolSubmit">Join carpool</button>
       <button type="button" class="ghost" id="backFromJoinCanDrive">Back</button>
     </form>
   </section>
@@ -177,12 +183,13 @@
   <section class="screen hidden" data-screen="create-name">
     <div>
       <h1>Name your carpool</h1>
-      <p class="subtitle">This helps everyone recognize it. You can skip this.</p>
+      <p class="subtitle">This helps everyone recognize it.</p>
     </div>
     <form class="card" data-step-form="create-name">
+      <p class="error hidden" id="createNameError"></p>
       <div class="field">
-        <label for="createCarpoolName">Carpool name (optional)</label>
-        <input type="text" id="createCarpoolName" placeholder="e.g. Morning School Run" autocomplete="off" />
+        <label for="createCarpoolName">Carpool name</label>
+        <input type="text" id="createCarpoolName" placeholder="e.g. Morning School Run" autocomplete="off" required />
       </div>
       <button type="submit">Next</button>
       <button type="button" class="ghost" data-back="home">Back</button>
@@ -193,7 +200,7 @@
   <section class="screen hidden" data-screen="create-yourname">
     <div>
       <h1>Your name</h1>
-      <p class="subtitle"><strong>This is about you, the parent/driver</strong> — not your child. So others know who's who.</p>
+      <p class="subtitle"><strong>This is about you, the Organizer/driver</strong> — not the people who will be riding with you.</p>
     </div>
     <form class="card" data-step-form="create-yourname">
       <p class="error hidden" id="createYourNameError"></p>
@@ -205,33 +212,21 @@
         <label for="createLastName">Your last name</label>
         <input type="text" id="createLastName" placeholder="e.g. Rivera" autocomplete="family-name" required />
       </div>
+      <div class="field">
+        <label for="createEmail">Your email</label>
+        <input type="email" id="createEmail" placeholder="e.g. alex@example.com" autocomplete="email" inputmode="email" autocapitalize="off" required />
+        <p class="field-help">We'll email you a summary of the carpool and its code.</p>
+      </div>
       <button type="submit">Next</button>
       <button type="button" class="ghost" data-back="create-name">Back</button>
     </form>
   </section>
 
-  <!-- CREATE: step 3, address -->
-  <section class="screen hidden" data-screen="create-address">
-    <div>
-      <h1>Your address</h1>
-      <p class="subtitle">Used to plan pickup stops when you're driving.</p>
-    </div>
-    <form class="card" data-step-form="create-address">
-      <p class="error hidden" id="createAddressError"></p>
-      <div class="field">
-        <label for="createAddress">Address</label>
-        <input type="text" id="createAddress" placeholder="e.g. 123 Main St" autocomplete="street-address" required />
-      </div>
-      <button type="submit">Next</button>
-      <button type="button" class="ghost" data-back="create-yourname">Back</button>
-    </form>
-  </section>
-
-  <!-- CREATE: step 4, seats -->
+  <!-- CREATE: step 3, seats -->
   <section class="screen hidden" data-screen="create-seats">
     <div>
       <h1>Your car</h1>
-      <p class="subtitle">How many passengers can you drive? (Not counting yourself — just seats available for kids.)</p>
+      <p class="subtitle">How many passengers can you drive? (Not counting yourself — just seats available for riders.)</p>
     </div>
     <form class="card" data-step-form="create-seats">
       <p class="error hidden" id="createSeatsError"></p>
@@ -239,40 +234,79 @@
         <label for="createSeats">Passengers you can drive</label>
         <input type="number" id="createSeats" inputmode="numeric" min="0" max="15" placeholder="e.g. 4" required />
       </div>
+      <p class="field-help">Please ensure that your passenger seats are appropriate for the riders in this carpool and comply with state and federal safety regulations (car seats, airbags, etc.).</p>
       <button type="submit">Next</button>
-      <button type="button" class="ghost" data-back="create-address">Back</button>
+      <button type="button" class="ghost" data-back="create-yourname">Back</button>
     </form>
   </section>
 
-  <!-- CREATE: step 5, children -->
+  <!-- CREATE: step 4, riders -->
   <section class="screen hidden" data-screen="create-children">
     <div>
-      <h1>Your children</h1>
-      <p class="subtitle">Add the kids you'll need rides for. You can skip this.</p>
+      <h1>Your riders</h1>
+      <p class="subtitle">Add the names of anyone you'll need a ride for (including yourself). You can skip this if you will only be driving.</p>
     </div>
     <form class="card" data-step-form="create-children">
       <div class="field">
         <label class="same-lastname-check" for="createSameLastName">
           <input type="checkbox" id="createSameLastName" data-same-lastname="create" checked />
-          Children have the same last name as me
+          Riders have the same last name as me
         </label>
         <div class="child-list" data-childlist="create"></div>
-        <button type="button" class="secondary" data-add-child="create">+ Add a child</button>
+        <button type="button" class="secondary" data-add-child="create">+ Add a rider</button>
       </div>
       <button type="submit">Next</button>
       <button type="button" class="ghost" data-back="create-seats">Back</button>
     </form>
   </section>
 
-  <!-- CREATE: step 6, activity type -->
+  <!-- CREATE: step 5, addresses (skipped if no riders) -->
+  <section class="screen hidden" data-screen="create-address">
+    <div>
+      <h1>Your addresses</h1>
+      <p class="subtitle">This is where your rider(s) will be picked up before the activity and dropped off after the activity. You can add more than one address (e.g., home, afterschool program, daycare).</p>
+    </div>
+    <form class="card" data-step-form="create-address">
+      <p class="error hidden" id="createAddressError"></p>
+      <div class="field">
+        <div class="child-list" data-addresslist="create"></div>
+        <button type="button" class="secondary" data-add-address="create">+ Add an address</button>
+      </div>
+      <button type="submit">Next</button>
+      <button type="button" class="ghost" data-back="create-children">Back</button>
+    </form>
+  </section>
+
+  <!-- CREATE: step 6, the activity itself -->
+  <section class="screen hidden" data-screen="create-activity">
+    <div>
+      <h1>Activity</h1>
+      <p class="subtitle">What is this carpool for, and where is it?</p>
+    </div>
+    <form class="card" data-step-form="create-activity">
+      <p class="error hidden" id="createActivityError"></p>
+      <div class="field">
+        <label for="createActivityName">Name of the activity</label>
+        <input type="text" id="createActivityName" placeholder="e.g. Soccer practice" autocomplete="off" required />
+      </div>
+      <div class="field">
+        <label for="createActivityLocation">Location of the activity</label>
+        <input type="text" id="createActivityLocation" placeholder="e.g. Pine Hill field" autocomplete="off" required />
+      </div>
+      <button type="submit">Next</button>
+      <button type="button" class="ghost" id="backFromActivity">Back</button>
+    </form>
+  </section>
+
+  <!-- CREATE: step 7, activity type -->
   <section class="screen hidden" data-screen="create-datetype">
     <div>
       <h1>Activity schedule</h1>
-      <p class="subtitle">How does this activity happen?</p>
+      <p class="subtitle">When does this activity happen?</p>
     </div>
     <div class="home-buttons">
       <button type="button" class="big-btn" id="chooseRecurringBtn">
-        Recurring on certain weekdays
+        Recurring on certain days
         <span class="big-btn-sub">e.g. every Monday and Wednesday</span>
       </button>
       <button type="button" class="big-btn secondary" id="chooseSpecificBtn">
@@ -280,14 +314,13 @@
         <span class="big-btn-sub">Pick individual days on a calendar</span>
       </button>
     </div>
-    <button type="button" class="ghost" data-back="create-children">Back</button>
+    <button type="button" class="ghost" data-back="create-activity">Back</button>
   </section>
 
   <!-- CREATE: step 7a, recurring weekdays + range -->
   <section class="screen hidden" data-screen="create-dates-recurring">
     <div>
       <h1>Which days?</h1>
-      <p class="subtitle">Pick the weekdays this activity happens on.</p>
     </div>
     <form class="card" data-step-form="create-dates-recurring">
       <p class="error hidden" id="createRecurringError"></p>
@@ -304,7 +337,7 @@
       </div>
       <label class="same-lastname-check" for="createRecurringEndless">
         <input type="checkbox" id="createRecurringEndless" />
-        This recurs endlessly (no end date)
+        This activity repeats with no end date.
       </label>
       <button type="submit">Next</button>
       <button type="button" class="ghost" data-back="create-datetype">Back</button>
@@ -335,7 +368,7 @@
   <section class="screen hidden" data-screen="create-timesmode">
     <div>
       <h1>Activity times</h1>
-      <p class="subtitle">Is the time the same every day, or does it change?</p>
+      <p class="subtitle">Does the activity occur at the same time each day, or does it change?</p>
     </div>
     <div class="home-buttons">
       <button type="button" class="big-btn" id="chooseSameTimeBtn">
@@ -354,16 +387,16 @@
   <section class="screen hidden" data-screen="create-times-uniform">
     <div>
       <h1>Activity times</h1>
-      <p class="subtitle">What time does it start and end?</p>
+      <p class="subtitle">When does it start and end?</p>
     </div>
     <form class="card" data-step-form="create-times-uniform">
       <p class="error hidden" id="createUniformTimesError"></p>
       <div class="field">
-        <label for="createUniformThere">Start time (drop-off)</label>
+        <label for="createUniformThere">Start time (drop off)</label>
         <input type="time" id="createUniformThere" required />
       </div>
       <div class="field">
-        <label for="createUniformBack">End time (pickup)</label>
+        <label for="createUniformBack">End time (pick up)</label>
         <input type="time" id="createUniformBack" required />
       </div>
       <button type="submit">Next</button>
@@ -397,11 +430,11 @@
     <div class="card hidden" id="perDateEditorCard">
       <h2 id="perDateEditorLabel"></h2>
       <div class="field">
-        <label for="perDateThere">Start time (drop-off)</label>
+        <label for="perDateThere">Start time (drop off)</label>
         <input type="time" id="perDateThere" />
       </div>
       <div class="field">
-        <label for="perDateBack">End time (pickup)</label>
+        <label for="perDateBack">End time (pick up)</label>
         <input type="time" id="perDateBack" />
       </div>
       <p class="error hidden" id="perDateEditorError"></p>
@@ -419,18 +452,18 @@
   <section class="screen hidden" data-screen="create-confirm">
     <div>
       <h1>Review your carpool</h1>
-      <p class="subtitle">Make sure everything looks right before continuing.</p>
+      <p class="subtitle">Let's make sure everything looks right!</p>
     </div>
     <div class="card" id="createSummaryContent"></div>
     <button type="button" id="confirmContinueBtn">Continue</button>
     <button type="button" class="ghost" id="confirmBackBtn">Back</button>
   </section>
 
-  <!-- CREATE: step 10, days kids need a ride (skipped if no children) -->
+  <!-- CREATE: step 10, days riders need a ride (skipped if no riders) -->
   <section class="screen hidden" data-screen="create-needsride">
     <div>
-      <h1>Ride days</h1>
-      <p class="subtitle">Which days do your kids need a ride, and for which leg?</p>
+      <h1>Carpool rides</h1>
+      <p class="subtitle">When do your riders need a ride from the carpool? (You'll set your availability to drive the carpool on the next screen.)</p>
     </div>
     <form class="card" data-step-form="create-needsride">
       <p class="error hidden" id="createNeedsRideError"></p>
@@ -443,13 +476,13 @@
   <!-- CREATE: step 11, days you can drive -->
   <section class="screen hidden" data-screen="create-candrive">
     <div>
-      <h1>Driving days</h1>
-      <p class="subtitle">Which days can you drive, and for which leg?</p>
+      <h1>Driving the carpool</h1>
+      <p class="subtitle">When are you available to drive the carpool?</p>
     </div>
     <form class="card" data-step-form="create-candrive">
       <p class="error hidden" id="createCanDriveError"></p>
       <div id="createCanDriveList" class="child-list"></div>
-      <button type="submit">Create carpool</button>
+      <button type="submit" id="createCarpoolSubmit">Create carpool</button>
       <button type="button" class="ghost" id="backFromCanDrive">Back</button>
     </form>
   </section>
@@ -459,6 +492,7 @@
     <div>
       <h1>You're all set!</h1>
       <p class="subtitle">Share this code so others can join your carpool. Tap it to copy.</p>
+      <p class="subtitle hidden" id="createEmailSentNote"></p>
     </div>
     <div class="card">
       <div class="code-reveal" id="createdCode" role="button" tabindex="0"></div>
@@ -474,7 +508,7 @@
   <div class="overlay-card complete-popup-card">
     <div class="complete-check">✓</div>
     <p>All set!</p>
-    <p class="subtitle">Now onto your ride &amp; driving times.</p>
+    <p class="subtitle">Now let's schedule your rides!</p>
   </div>
 </div>
 

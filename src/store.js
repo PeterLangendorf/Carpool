@@ -3,7 +3,22 @@ const { getStore } = require('@netlify/blobs');
 const STORE_NAME = 'carpool-db';
 const DB_KEY = 'db';
 
+// LOCAL_DB_FILE (set by `npm run local`) swaps Netlify Blobs for a plain
+// JSON file, so the app can run entirely offline on your own machine.
+function getFileStore(file) {
+  const fs = require('fs');
+  return {
+    async get() {
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+    },
+    async setJSON(key, value) {
+      fs.writeFileSync(file, JSON.stringify(value, null, 2));
+    },
+  };
+}
+
 function getDbStore() {
+  if (process.env.LOCAL_DB_FILE) return getFileStore(process.env.LOCAL_DB_FILE);
   return getStore(STORE_NAME);
 }
 

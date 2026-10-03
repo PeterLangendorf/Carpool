@@ -14,6 +14,10 @@ computes a fair driving schedule for each activity date.
   `/api/*` serverless function locally at `http://localhost:8888`. First run requires
   `netlify login` and `netlify init` (or `netlify link`) so the CLI has a site to emulate
   Netlify Blobs against — without that, API calls fail with a Blobs "not configured" error.
+- `npm run local` — runs everything on this machine with no Netlify involvement (`local-server.js`):
+  one Express server for `public/` + the API on port 8888, listening on all interfaces so
+  phones on the same Wi-Fi can connect. Data goes in `local-db.json` (gitignored) instead of
+  Netlify Blobs, via the `LOCAL_DB_FILE` switch in `src/store.js`.
 - No test suite and no lint config currently exist in this repo.
 
 ## Architecture

@@ -4,7 +4,8 @@
   "description": "iOS-friendly carpool scheduling website",
   "main": "netlify/functions/api.js",
   "scripts": {
-    "start": "netlify dev"
+    "start": "netlify dev",
+    "local": "node local-server.js"
   },
   "dependencies": {
     "express": "^4.19.2",

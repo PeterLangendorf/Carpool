@@ -1,6 +1,7 @@
 const express = require('express');
 const store = require('./store');
 const { buildSchedule } = require('./scheduler');
+const { sendCarpoolSummary } = require('./email');
 
 const app = express();
 app.use(express.json());
@@ -24,6 +25,35 @@ function parseChildren(value) {
     .slice(0, 10);
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_ADDRESSES = 5;
+
+// Accepts the current `addresses: [string]` shape, falling back to the older
+// single `address` string.
+function parseAddresses(body) {
+  const raw = Array.isArray(body.addresses) ? body.addresses : body.address ? [body.address] : [];
+  return raw
+    .map((a) => String(a || '').trim())
+    .filter(Boolean)
+    .slice(0, MAX_ADDRESSES);
+}
+
+// `rideAddresses` picks which of the member's addresses each ride uses, as
+// { there: { [weekday]: addressIndex }, back: { ... } }. Indexes refer to the
+// `addresses` array in the same request; the store swaps them for address IDs.
+function parseRideAddresses(value, addressCount) {
+  const out = { there: {}, back: {} };
+  if (!value || typeof value !== 'object') return out;
+  ['there', 'back'].forEach((leg) => {
+    Object.entries(value[leg] || {}).forEach(([weekday, index]) => {
+      const w = Number(weekday);
+      const i = Number(index);
+      if (VALID_DAYS.includes(w) && Number.isInteger(i) && i >= 0 && i < addressCount) out[leg][w] = i;
+    });
+  });
+  return out;
+}
+
 function validateMemberInput(body) {
   const errors = [];
   const firstName = (body.firstName || '').trim();
@@ -32,8 +62,8 @@ function validateMemberInput(body) {
   if (!lastName) errors.push('Last name is required');
   const name = `${firstName} ${lastName}`.trim();
 
-  const address = (body.address || '').trim();
-  if (!address) errors.push('Address is required');
+  const email = String(body.email || '').trim();
+  if (!EMAIL_RE.test(email)) errors.push('A valid email address is required');
 
   const seats = Number(body.seats);
   if (!Number.isInteger(seats) || seats < 0 || seats > 15) {
@@ -48,7 +78,16 @@ function validateMemberInput(body) {
 
   const children = parseChildren(body.children);
 
-  return { errors, name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children };
+  // An address is only needed to pick up/drop off riders — a driver-only
+  // member can skip it.
+  const addresses = parseAddresses(body);
+  if (children.length && !addresses.length) errors.push('At least one address is required');
+  const rideAddresses = parseRideAddresses(body.rideAddresses, addresses.length);
+
+  return {
+    errors,
+    member: { name, lastName, email, addresses, rideAddresses, seats, canDriveThereDays, canDriveBackDays, children },
+  };
 }
 
 // Carpools created before ownership tracking existed have no stored
@@ -60,9 +99,15 @@ function getEffectiveOwnerId(carpool) {
 // Carpools created before the two-leg (there/back) model existed used a
 // single canDriveDays/needsRideDays list — normalize those into "available
 // or needed for both legs" so old data keeps working.
+//
+// Likewise, members from before multiple addresses existed have a single
+// `address` string — expose it as a one-entry `addresses` list. Emails are
+// stripped: the carpool payload is readable by anyone with the join code.
 function normalizeMembers(members) {
-  return members.map((m) => ({
+  return members.map(({ email, ...m }) => ({
     ...m,
+    addresses: m.addresses || (m.address ? [{ id: 'a_legacy', address: m.address }] : []),
+    rideAddresses: m.rideAddresses || { there: {}, back: {} },
     canDriveThereDays: m.canDriveThereDays || m.canDriveDays || [],
     canDriveBackDays: m.canDriveBackDays || m.canDriveDays || [],
     children: (m.children || []).map((c) => ({
@@ -97,6 +142,8 @@ function serializeCarpool(carpool) {
   return {
     code: carpool.code,
     name: carpool.name,
+    activityName: carpool.activityName || '',
+    activityLocation: carpool.activityLocation || '',
     ownerId: getEffectiveOwnerId(carpool),
     activityDates: carpool.activityDates || [],
     activityTimes: normalizeActivityTimes(carpool.activityTimes),
@@ -112,19 +159,31 @@ function getScheduleResult(carpool) {
   return buildSchedule(normalizeMembers(carpool.members), upcoming, carpool.dateOverrides || {}, normalizeActivityTimes(carpool.activityTimes));
 }
 
+function siteUrl(req) {
+  if (process.env.URL) return process.env.URL.replace(/\/$/, '');
+  return `https://${req.get('x-forwarded-host') || req.get('host')}`;
+}
+
 app.post('/api/carpools', async (req, res) => {
-  const { carpoolName, dates, times, recurrence } = req.body;
-  const { errors, name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children } = validateMemberInput(req.body);
+  const { dates, times, recurrence } = req.body;
+  const carpoolName = String(req.body.carpoolName || '').trim();
+  const activityName = String(req.body.activityName || '').trim();
+  const activityLocation = String(req.body.activityLocation || '').trim();
+  const { errors, member: memberInput } = validateMemberInput(req.body);
+  if (!carpoolName) errors.push('Carpool name is required');
+  if (!activityName) errors.push('Activity name is required');
+  if (!activityLocation) errors.push('Activity location is required');
   if (dates !== undefined) errors.push(...activityDatesErrors(dates, times, recurrence));
   if (errors.length) return res.status(400).json({ errors });
 
   try {
     const { carpool, member } = await store.createCarpoolWithOwner(
-      carpoolName,
-      { name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children },
+      { name: carpoolName, activityName, activityLocation },
+      memberInput,
       dates !== undefined ? { dates, times: times || {}, recurrence } : null
     );
-    res.status(201).json({ carpool: serializeCarpool(carpool), member });
+    const emailSent = await sendCarpoolSummary(member.email, carpool, member, siteUrl(req));
+    res.status(201).json({ carpool: serializeCarpool(carpool), member: normalizeMembers([member])[0], emailSent });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
@@ -141,12 +200,13 @@ app.get('/api/carpools/:code', async (req, res) => {
 });
 
 app.post('/api/carpools/:code/members', async (req, res) => {
-  const { errors, name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children } = validateMemberInput(req.body);
+  const { errors, member: memberInput } = validateMemberInput(req.body);
   if (errors.length) return res.status(400).json({ errors });
 
   try {
-    const member = await store.addMember(req.params.code, { name, lastName, address, seats, canDriveThereDays, canDriveBackDays, children });
-    res.status(201).json({ member });
+    const { member, carpool } = await store.addMember(req.params.code, memberInput);
+    const emailSent = await sendCarpoolSummary(member.email, carpool, member, siteUrl(req));
+    res.status(201).json({ member: normalizeMembers([member])[0], emailSent });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }

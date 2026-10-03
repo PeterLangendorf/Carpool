@@ -73,6 +73,18 @@ There is no long-running server process — see `netlify.toml` for the redirect 
 - **Fairness scheduling**: `buildSchedule` prefers one driver who can solo both legs of a
   date; otherwise it fills each leg independently by lowest running drive-count (ties broken
   by longest time since last drove), adding a second driver only if capacity requires it.
+- **Addresses are per member, chosen per ride**: a member has `addresses: [{id, address}]`
+  (only required if they have riders) and `rideAddresses: { there: {weekday: addressId},
+  back: {...} }` saying which address each ride starts/ends at (falls back to the first
+  address). The create/join request sends `addresses` as strings and `rideAddresses` as
+  indexes into that list; `store.buildMember` swaps indexes for generated IDs. The legacy
+  single `address` field is still written (as the first address) and upgraded on read by
+  `normalizeMembers`.
+- **Carpools have `activityName` / `activityLocation`**; the location is the end of every
+  drop-off route and the start of every pick-up route in the dashboard's route overlay.
+- **Summary email** (`src/email.js`): sent on create and join via Resend's HTTP API, only
+  when the `RESEND_API_KEY` and `EMAIL_FROM` env vars are set (otherwise a silent no-op).
+  Member emails are stored but stripped from every API response by `normalizeMembers`.
 - **Authorization is requester-ID based, not session-based**: mutating endpoints take a
   `requesterId` in the body and compare it against the target member/owner ID — there's no
   auth token or cookie session. `code` uniquely identifies a carpool; `store.normalizeCode`

@@ -228,13 +228,30 @@ function composeChildName(firstName, lastNameOverride, parentLastName) {
   return `${String(firstName).trim()} ${lastName}`.trim();
 }
 
+function generateAddressId() {
+  return 'a_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
 function buildMember(member) {
   const lastName = (member.lastName || '').trim();
+  const addresses = (member.addresses || []).map((address) => ({ id: generateAddressId(), address: String(address).trim() }));
+  // Input ride addresses reference addresses by position in the submitted
+  // list; store them by ID so later edits to the list can't shift them.
+  const rideAddresses = { there: {}, back: {} };
+  ['there', 'back'].forEach((leg) => {
+    Object.entries((member.rideAddresses && member.rideAddresses[leg]) || {}).forEach(([weekday, index]) => {
+      if (addresses[index]) rideAddresses[leg][weekday] = addresses[index].id;
+    });
+  });
   return {
     id: 'm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
     name: member.name.trim(),
     lastName,
-    address: (member.address || '').trim(),
+    email: (member.email || '').trim(),
+    // Kept alongside `addresses` (as the first one) for older readers of the blob.
+    address: addresses[0] ? addresses[0].address : '',
+    addresses,
+    rideAddresses,
     seats: Number(member.seats),
     canDriveThereDays: Array.from(new Set((member.canDriveThereDays || []).map(Number))).sort(),
     canDriveBackDays: Array.from(new Set((member.canDriveBackDays || []).map(Number))).sort(),
@@ -253,7 +270,7 @@ function buildMember(member) {
 // prior write, so anything that must see its own just-created data has to
 // happen within one load/save cycle rather than a load(); save(); load()...
 // chain across multiple store calls.
-async function createCarpoolWithOwner(name, memberInput, activityDatesInput) {
+async function createCarpoolWithOwner(details, memberInput, activityDatesInput) {
   const db = await load();
   let code;
   do {
@@ -263,7 +280,9 @@ async function createCarpoolWithOwner(name, memberInput, activityDatesInput) {
   const member = buildMember(memberInput);
   const carpool = {
     code,
-    name: name && name.trim() ? name.trim() : code,
+    name: details.name && details.name.trim() ? details.name.trim() : code,
+    activityName: (details.activityName || '').trim(),
+    activityLocation: (details.activityLocation || '').trim(),
     createdAt: new Date().toISOString(),
     ownerId: member.id,
     activityDates: [],
@@ -287,7 +306,7 @@ async function addMember(code, member) {
   const newMember = buildMember(member);
   carpool.members.push(newMember);
   await save(db);
-  return newMember;
+  return { member: newMember, carpool };
 }
 
 // Returns the updated carpool, or null if removing the member left it empty
@@ -323,7 +342,7 @@ async function removeMember(code, memberId) {
 
 function findOwnMember(carpool, memberId, requesterId) {
   if (memberId !== requesterId) {
-    const err = new Error('You can only manage your own children');
+    const err = new Error('You can only manage your own riders');
     err.status = 403;
     throw err;
   }
@@ -359,7 +378,7 @@ async function updateChild(code, memberId, requesterId, childId, updates) {
   const member = findOwnMember(carpool, memberId, requesterId);
   const child = (member.children || []).find((c) => c.id === childId);
   if (!child) {
-    const err = new Error('Child not found');
+    const err = new Error('Rider not found');
     err.status = 404;
     throw err;
   }
@@ -400,7 +419,7 @@ async function setChildExclusion(code, date, requesterId, childId, excluded) {
   const carpool = getCarpoolOrThrow(db, code);
   const parent = carpool.members.find((m) => (m.children || []).some((c) => c.id === childId));
   if (!parent || parent.id !== requesterId) {
-    const err = new Error('You can only manage your own children');
+    const err = new Error('You can only manage your own riders');
     err.status = 403;
     throw err;
   }

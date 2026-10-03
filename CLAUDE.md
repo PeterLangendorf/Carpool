@@ -74,9 +74,12 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   `normalizeActivityTimes`, which upgrade old single-leg data shapes (`canDriveDays`,
   `needsRideDays`, a flat `date -> "HH:MM"` map) into the current two-leg shape at read time.
   The stored blob itself is never migrated — old and new shapes coexist in it.
-- **Fairness scheduling**: `buildSchedule` prefers one driver who can solo both legs of a
-  date; otherwise it fills each leg independently by lowest running drive-count (ties broken
-  by longest time since last drove), adding a second driver only if capacity requires it.
+- **Fairness scheduling**: `buildSchedule` fills each leg independently by lowest running
+  drive-count (ties broken by longest time since last drove), adding a second driver only if
+  capacity requires it. It swaps in one driver for both legs of a date only when that driver's
+  count is no higher than the average of the split's drivers (or the split falls short on
+  drivers/seats) — an unconditional solo preference let one always-available member take
+  every such date while others never drove.
 - **Addresses are per member, chosen per ride**: a member has `addresses: [{id, address}]`
   (only required if they have riders) and `rideAddresses: { there: {weekday: addressId},
   back: {...} }` saying which address each ride starts/ends at (falls back to the first

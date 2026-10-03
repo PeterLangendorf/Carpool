@@ -13,10 +13,14 @@ const { resolveActivityTimes } = require('./store');
  * listed in `member.canDriveThereDays` / `canDriveBackDays`. Seats are the
  * driver's direct passenger capacity (no seat is reserved for the driver).
  *
- * For each date, the scheduler first tries to find a single parent who is
- * eligible and has enough seats to drive BOTH legs (preferred, so the same
- * person handles drop-off and pickup); if no one qualifies solo, the two
- * legs are resolved independently and may end up with different drivers.
+ * For each date, the scheduler considers a single parent who is eligible
+ * and has enough seats to drive BOTH legs (so the same person handles drop-
+ * off and pickup), and compares that with filling the two legs
+ * independently. The single driver is used only if it doesn't make the
+ * schedule less fair: their drive count so far must be no higher than the
+ * average of the drivers the split would use (or the split must leave a ride
+ * without a driver / short on seats). Otherwise someone who can always do
+ * both legs would take every such date and others would never drive.
  * Each leg is filled using the same fairness rule as before: lowest
  * running drive-count so far (ties broken by longest time since last
  * drove), adding a second driver only if one person's capacity isn't
@@ -100,10 +104,7 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
     const thereEligible = members.filter((m) => (m.canDriveThereDays || []).includes(weekday));
     const backEligible = members.filter((m) => (m.canDriveBackDays || []).includes(weekday));
 
-    let thereResult;
-    let backResult;
-
-    // Prefer a single driver who can cover both legs solo.
+    // A single driver who can cover both legs solo, if any.
     const bothEligible = members.filter(
       (m) => (m.canDriveThereDays || []).includes(weekday) && (m.canDriveBackDays || []).includes(weekday)
     );
@@ -112,22 +113,36 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
       .sort(byFairness)
       .find((m) => (thereChildren.length === 0 || m.seats >= thereChildren.length) && (backChildren.length === 0 || m.seats >= backChildren.length));
 
+    // Fill the legs independently first (the back leg sees the there leg's
+    // drives, as it would for real), remembering the counts beforehand so
+    // this can be undone if the solo driver turns out to be the fairer pick.
+    const countsBefore = new Map(driveCount);
+    const lastBefore = new Map(lastDrivenIndex);
+    let thereResult = pickDrivers(thereEligible, thereChildren.length);
+    if (thereResult.drivers.length) markDriven(thereResult.drivers, i);
+    let backResult = pickDrivers(backEligible, backChildren.length);
+    if (backResult.drivers.length) markDriven(backResult.drivers, i);
+
     if (soloBoth && (thereChildren.length > 0 || backChildren.length > 0)) {
-      thereResult = thereChildren.length
-        ? { drivers: [soloBoth], noDriverAvailable: false, overCapacity: false, strandedCount: 0 }
-        : { drivers: [], noDriverAvailable: false, overCapacity: false, strandedCount: 0 };
-      backResult = backChildren.length
-        ? { drivers: [soloBoth], noDriverAvailable: false, overCapacity: false, strandedCount: 0 }
-        : { drivers: [], noDriverAvailable: false, overCapacity: false, strandedCount: 0 };
-      const legsDriven = [];
-      if (thereChildren.length) legsDriven.push(soloBoth);
-      if (backChildren.length) legsDriven.push(soloBoth);
-      markDriven(legsDriven, i);
-    } else {
-      thereResult = pickDrivers(thereEligible, thereChildren.length);
-      if (thereResult.drivers.length) markDriven(thereResult.drivers, i);
-      backResult = pickDrivers(backEligible, backChildren.length);
-      if (backResult.drivers.length) markDriven(backResult.drivers, i);
+      const splitDrivers = [...thereResult.drivers, ...backResult.drivers];
+      const splitFallsShort =
+        thereResult.noDriverAvailable || backResult.noDriverAvailable || thereResult.overCapacity || backResult.overCapacity;
+      const splitAverage = splitDrivers.length
+        ? splitDrivers.reduce((sum, d) => sum + countsBefore.get(d.id), 0) / splitDrivers.length
+        : Infinity;
+
+      if (splitFallsShort || countsBefore.get(soloBoth.id) <= splitAverage) {
+        countsBefore.forEach((v, k) => driveCount.set(k, v));
+        lastBefore.forEach((v, k) => lastDrivenIndex.set(k, v));
+        const solo = (count) =>
+          count ? { drivers: [soloBoth], noDriverAvailable: false, overCapacity: false, strandedCount: 0 } : pickDrivers([], 0);
+        thereResult = solo(thereChildren.length);
+        backResult = solo(backChildren.length);
+        const legsDriven = [];
+        if (thereChildren.length) legsDriven.push(soloBoth);
+        if (backChildren.length) legsDriven.push(soloBoth);
+        markDriven(legsDriven, i);
+      }
     }
 
     const times = resolveActivityTimes(activityTimes, dateStr, weekday);

@@ -19,6 +19,7 @@
       <img src="/img/app-icon.svg" alt="" class="site-logo" />
       <div>
         <h1 id="carpoolName">Carpool</h1>
+        <p class="subtitle hidden" id="activitySummary"></p>
         <p class="subtitle" id="whoami"></p>
       </div>
     </div>
@@ -50,7 +51,7 @@
       <span class="action-icon">👥</span><span>Members</span>
     </button>
     <button type="button" id="myChildrenBtn" class="action-btn">
-      <span class="action-icon">👶</span><span>My children</span>
+      <span class="action-icon">🧒</span><span>My riders</span>
     </button>
     <button type="button" id="editDatesBtn" class="action-btn hidden">
       <span class="action-icon">✏️</span><span>Edit dates</span>
@@ -75,15 +76,15 @@
   </div>
 </div>
 
-<!-- My children overlay -->
+<!-- My riders overlay -->
 <div class="overlay hidden" id="myChildrenOverlay">
   <div class="overlay-card">
     <div class="header-row">
-      <h2>My children</h2>
+      <h2>My riders</h2>
       <button type="button" id="closeMyChildren" class="ghost overlay-close-btn">Close</button>
     </div>
     <div id="myChildrenList"></div>
-    <button type="button" id="addMyChildBtn" class="secondary">+ Add a child</button>
+    <button type="button" id="addMyChildBtn" class="secondary">+ Add a rider</button>
     <p class="error hidden" id="myChildrenError"></p>
   </div>
 </div>
@@ -126,11 +127,11 @@
   <div class="overlay-card">
     <h2 id="timePickerDateLabel"></h2>
     <div class="field">
-      <label for="timePickerThereInput">Start time (drop-off)</label>
+      <label for="timePickerThereInput">Start time (drop off)</label>
       <input type="time" id="timePickerThereInput" />
     </div>
     <div class="field">
-      <label for="timePickerBackInput">End time (pickup)</label>
+      <label for="timePickerBackInput">End time (pick up)</label>
       <input type="time" id="timePickerBackInput" />
     </div>
     <p class="error hidden" id="timePickerError"></p>

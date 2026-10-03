@@ -7,10 +7,10 @@
   --border: #d3e6f7;
   --accent: #0ea5e9;
   --accent-text: #ffffff;
-  --highlight: #fff4d6;
-  --highlight-border: #f0b429;
+  --highlight: #f0f8ff;
+  --highlight-border: #9fd3f5;
   --danger: #dc2626;
-  --today-ring: #8b5cf6;
+  --selected-ring: #8b5cf6;
   --cal-none-bg: #8b93a1;
   --cal-none-text: #ffffff;
   --cal-notme-bg: #d7dbe0;
@@ -327,8 +327,8 @@ button.ghost {
   margin-left: 6px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--highlight-border);
-  color: #14161a;
+  background: var(--accent);
+  color: var(--accent-text);
   font-size: 0.7rem;
   font-weight: 700;
 }
@@ -512,9 +512,15 @@ footer.actions {
   color: var(--cal-past-text);
 }
 
-.cal-cell.today {
-  outline: 2px solid var(--today-ring);
+/* The ring marks whichever day's details are shown below the calendar. */
+.cal-cell.active-day {
+  outline: 3px solid var(--selected-ring);
   outline-offset: 1px;
+}
+
+.cal-cell.today .cal-daynum {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .cal-cell.selected {
@@ -926,8 +932,8 @@ footer.actions {
 }
 
 .header-title-row .site-logo {
-  width: 32px;
-  height: 32px;
+  width: 56px;
+  height: 56px;
 }
 
 .home-banner,

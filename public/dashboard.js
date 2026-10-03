@@ -122,7 +122,7 @@ function renderCalendarHeader(container) {
   });
 }
 
-// ---- Leg-day-picker: one row per active weekday, with There/Back checkboxes ----
+// ---- Leg-day-picker: one row per active weekday, with Drop off/Pick up checkboxes ----
 
 function renderLegDayPicker(container, weekdays, timeResolver, selected) {
   container.innerHTML = '';
@@ -134,8 +134,8 @@ function renderLegDayPicker(container, weekdays, timeResolver, selected) {
   const selBack = new Set((selected && selected.backDays) || []);
   weekdays.forEach((w) => {
     const times = timeResolver ? timeResolver(w) : null;
-    const thereLabel = times && times.there ? `There · ${formatTimeShort(times.there)}` : 'There';
-    const backLabel = times && times.back ? `Back · ${formatTimeShort(times.back)}` : 'Back';
+    const thereLabel = times && times.there ? `Drop off · ${formatTimeShort(times.there)}` : 'Drop off';
+    const backLabel = times && times.back ? `Pick up · ${formatTimeShort(times.back)}` : 'Pick up';
     const row = document.createElement('div');
     row.className = 'leg-day-row';
     row.innerHTML = `
@@ -249,8 +249,8 @@ function renderProblems() {
 
   const problems = [];
   scheduleData.schedule.forEach((e) => {
-    if (e.there.noDriverAvailable || e.there.overCapacity) problems.push({ entry: e, legData: e.there, legLabel: 'morning ride' });
-    if (e.back.noDriverAvailable || e.back.overCapacity) problems.push({ entry: e, legData: e.back, legLabel: 'afternoon ride' });
+    if (e.there.noDriverAvailable || e.there.overCapacity) problems.push({ entry: e, legData: e.there, legLabel: 'drop off ride' });
+    if (e.back.noDriverAvailable || e.back.overCapacity) problems.push({ entry: e, legData: e.back, legLabel: 'pick up ride' });
   });
 
   card.classList.toggle('hidden', problems.length === 0);
@@ -260,7 +260,7 @@ function renderProblems() {
 
   shown.forEach(({ entry, legData, legLabel }) => {
     const message = legData.noDriverAvailable
-      ? `No parents are available to drive the ${legLabel}.`
+      ? `No drivers are available for the ${legLabel}.`
       : `Not enough seats for the ${legLabel} — ${legData.strandedCount} more seat${legData.strandedCount === 1 ? '' : 's'} needed.`;
 
     const item = document.createElement('button');
@@ -306,6 +306,7 @@ function renderDatesStatus() {
 }
 
 const CALENDAR_DAYS_SHOWN = 28; // 4 weeks
+let selectedDateKey = null;
 
 function legStatus(leg) {
   if (!leg || leg.children.length === 0) return 'none';
@@ -362,7 +363,8 @@ function renderMainCalendar() {
 
     const cell = document.createElement('button');
     cell.type = 'button';
-    cell.className = `cal-cell ${stateClass}` + (isToday ? ' today' : '');
+    cell.className = `cal-cell ${stateClass}` + (isToday ? ' today' : '') + (dateKey === selectedDateKey ? ' active-day' : '');
+    cell.dataset.date = dateKey;
 
     cell.innerHTML = `
       <span class="cal-daynum">${date.getDate()}</span>
@@ -376,11 +378,11 @@ function renderMainCalendar() {
 
 function renderChildrenSection(entry, isMine) {
   if (!entry.children.length) {
-    return '<div class="riders">No kids scheduled this ride.</div>';
+    return '<div class="riders">No riders scheduled this ride.</div>';
   }
   if (!isMine) {
     const list = entry.children.map((c) => `${c.name} (${c.parentName})`).join(', ');
-    return `<div class="riders">Kids going: ${list}</div>`;
+    return `<div class="riders">Riders going: ${list}</div>`;
   }
   const items = entry.children
     .map((c) => {
@@ -390,7 +392,7 @@ function renderChildrenSection(entry, isMine) {
     .join('');
   return `
     <div class="pickup-list">
-      <div class="pickup-list-title">🧒 Kids you're picking up</div>
+      <div class="pickup-list-title">🧒 Riders you're driving</div>
       <ul class="pickup-items">${items}</ul>
     </div>
   `;
@@ -413,7 +415,7 @@ function renderChildToggles(children, entry) {
     .join('');
   return `
     <div class="child-toggles">
-      <div class="riders">Your kids for this day:</div>
+      <div class="riders">Your riders for this day:</div>
       ${rows}
       <button type="button" id="saveChildTogglesBtn" class="hidden">Save changes</button>
       <p class="error hidden" id="childToggleError"></p>
@@ -472,52 +474,83 @@ function wireChildToggles(dateKey) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Which of a member's addresses a given ride uses: the one they picked for
+// that leg + weekday, falling back to their first address.
+function rideAddressFor(member, leg, weekday) {
+  const addresses = (member && member.addresses) || [];
+  const chosenId = member && member.rideAddresses && member.rideAddresses[leg] && member.rideAddresses[leg][weekday];
+  const match = addresses.find((a) => a.id === chosenId) || addresses[0];
+  return match ? match.address : null;
+}
+
+function mapsLink(address, text) {
+  const url = `https://maps.apple.com/?address=${encodeURIComponent(address)}`;
+  return `<a href="${url}" target="_blank" rel="noopener">${escapeHtml(text || address)}</a>`;
+}
+
+function activityStopHtml(title, note) {
+  const location = carpool.activityLocation;
+  const label = `🏁 ${location || 'Activity'}`;
+  return `
+    <div class="route-stop route-stop-final">
+      <div class="route-address">${location ? mapsLink(location, label) : escapeHtml(label)}</div>
+      <div class="route-kids">${escapeHtml(title)}${note ? ` — ${escapeHtml(note)}` : ''}</div>
+    </div>
+  `;
+}
+
+// Lists the stops in the order they're added, with an Apple Maps link for
+// each — it doesn't reorder them into an optimized route.
 function openRouteOverlay(entry, leg) {
   const legData = leg === 'there' ? entry.there : entry.back;
-  const legLabel = leg === 'there' ? 'There' : 'Back';
+  const legLabel = leg === 'there' ? 'Drop off' : 'Pick up';
   document.getElementById('routeDateLabel').textContent = `${legLabel} · ${FULL_DAY_LABELS[entry.weekday]}, ${formatDateShort(entry.date)}`;
 
-  const stopsByParent = new Map();
+  const me = carpool.members.find((m) => m.id === identity.id);
+  const myAddressCount = me && me.addresses ? me.addresses.length : 0;
+
+  // Group riders by the address they're picked up from / dropped off at.
+  const stops = new Map();
   legData.children.forEach((c) => {
-    if (c.parentId === identity.id) return; // already have your own kids from home
-    if (!stopsByParent.has(c.parentId)) {
-      stopsByParent.set(c.parentId, { parentName: c.parentName, kids: [] });
-    }
-    stopsByParent.get(c.parentId).kids.push(c.name);
+    const member = carpool.members.find((m) => m.id === c.parentId);
+    const address = rideAddressFor(member, leg, entry.weekday);
+    // With a single address, your own riders start/end the trip with you at
+    // home — only list them as a stop when you've got several addresses.
+    if (c.parentId === identity.id && myAddressCount <= 1) return;
+    const key = `${c.parentId}|${address || ''}`;
+    if (!stops.has(key)) stops.set(key, { address, parentName: c.parentId === identity.id ? 'yours' : `${c.parentName}'s`, kids: [] });
+    stops.get(key).kids.push(c.name);
   });
 
   const container = document.getElementById('routeStops');
   container.innerHTML = '';
 
-  if (stopsByParent.size === 0) {
-    container.innerHTML = '<p class="subtitle">No other stops — just your own kids today!</p>';
-  } else {
-    stopsByParent.forEach(({ parentName, kids }, parentId) => {
-      const member = carpool.members.find((m) => m.id === parentId);
-      const address = member && member.address ? member.address : 'No address on file';
-      const mapsUrl = member && member.address ? `https://maps.apple.com/?address=${encodeURIComponent(member.address)}` : null;
+  // The drop off ride ends at the activity, after all the pickups; the pick
+  // up ride starts there instead.
+  if (leg === 'back') container.innerHTML += activityStopHtml('First stop', 'pick up all riders here.');
 
-      const stop = document.createElement('div');
-      stop.className = 'route-stop';
-      stop.innerHTML = `
-        <div class="route-address">${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">${address}</a>` : address}</div>
-        <div class="route-kids">Pick up: ${kids.join(', ')} (${parentName}'s)</div>
+  if (stops.size === 0) {
+    container.innerHTML += '<p class="subtitle">No other stops — just your own riders today!</p>';
+  } else {
+    stops.forEach(({ address, parentName, kids }) => {
+      container.innerHTML += `
+        <div class="route-stop">
+          <div class="route-address">${address ? mapsLink(address) : 'No address on file'}</div>
+          <div class="route-kids">${leg === 'there' ? 'Pick up' : 'Drop off'}: ${kids.map(escapeHtml).join(', ')} (${escapeHtml(parentName)})</div>
+        </div>
       `;
-      container.appendChild(stop);
     });
   }
 
-  // The "there" ride ends at the activity itself, after all the pickups —
-  // the "back" ride starts there instead, so it doesn't need this stop.
-  if (leg === 'there') {
-    const finalStop = document.createElement('div');
-    finalStop.className = 'route-stop route-stop-final';
-    finalStop.innerHTML = `
-      <div class="route-address">🏁 Event Destination</div>
-      <div class="route-kids">Last stop — head to the activity.</div>
-    `;
-    container.appendChild(finalStop);
-  }
+  if (leg === 'there') container.innerHTML += activityStopHtml('Last stop', 'drop off all riders here.');
 
   document.getElementById('routeOverlay').classList.remove('hidden');
   lockBodyScroll();
@@ -536,13 +569,13 @@ document.getElementById('closeRouteOverlay').addEventListener('click', dismissRo
 function renderLeg(entry, legData, time, label) {
   if (legData.children.length === 0) return '';
   const timeStr = time ? formatTimeShort(time) : '';
-  const legKey = label === 'There' ? 'there' : 'back';
+  const legKey = label === 'Drop off' ? 'there' : 'back';
 
   if (legData.noDriverAvailable) {
     return `
       <div class="leg-block">
         <div class="date-row"><strong>${label}</strong><span>${timeStr}</span></div>
-        <div class="warning">⚠ No parents are available to drive this ride.</div>
+        <div class="warning">⚠ No drivers are available for this ride.</div>
       </div>
     `;
   }
@@ -565,6 +598,11 @@ function renderLeg(entry, legData, time, label) {
 }
 
 function selectDay(dateKey) {
+  selectedDateKey = dateKey;
+  document.querySelectorAll('#calendarGrid .cal-cell').forEach((cell) => {
+    cell.classList.toggle('active-day', cell.dataset.date === dateKey);
+  });
+
   const panel = document.getElementById('dayDetails');
   const entry = scheduleData.schedule.find((e) => e.date === dateKey);
 
@@ -582,8 +620,8 @@ function selectDay(dateKey) {
   const isMine = entry.there.drivers.some((d) => d.id === identity.id) || entry.back.drivers.some((d) => d.id === identity.id);
   panel.classList.toggle('mine', isMine);
 
-  const thereHtml = renderLeg(entry, entry.there, entry.thereTime, 'There');
-  const backHtml = renderLeg(entry, entry.back, entry.backTime, 'Back');
+  const thereHtml = renderLeg(entry, entry.there, entry.thereTime, 'Drop off');
+  const backHtml = renderLeg(entry, entry.back, entry.backTime, 'Pick up');
 
   const me = carpool.members.find((m) => m.id === identity.id);
   const myRelevantChildren = me
@@ -593,7 +631,7 @@ function selectDay(dateKey) {
 
   panel.innerHTML = `
     <div class="date-row"><strong>${FULL_DAY_LABELS[entry.weekday]}</strong><span>${formatDateShort(entry.date)}</span></div>
-    ${!thereHtml && !backHtml ? '<div class="riders">No kids scheduled this day.</div>' : ''}
+    ${!thereHtml && !backHtml ? '<div class="riders">No riders scheduled this day.</div>' : ''}
     ${thereHtml}
     ${backHtml}
     ${myChildrenToggles}
@@ -629,7 +667,7 @@ function renderMembers() {
     const isOwnerRow = m.id === carpool.ownerId;
     const isMe = m.id === identity.id;
     const childCount = (m.children || []).length;
-    const label = `${m.name}${isMe ? ' (you)' : ''}${isOwnerRow ? ' · owner' : ''} — ${childCount} ${childCount === 1 ? 'child' : 'children'}`;
+    const label = `${m.name}${isMe ? ' (you)' : ''}${isOwnerRow ? ' · owner' : ''} — ${childCount} ${childCount === 1 ? 'rider' : 'riders'}`;
 
     const row = document.createElement('div');
     row.className = 'member-row';
@@ -673,7 +711,7 @@ function renderMyChildren() {
   list.innerHTML = '';
 
   if (!me.children.length) {
-    list.innerHTML = '<p class="subtitle">No children added yet.</p>';
+    list.innerHTML = '<p class="subtitle">No riders added yet.</p>';
     return;
   }
 
@@ -749,7 +787,7 @@ async function removeMyChild(childId, name) {
 }
 
 document.getElementById('addMyChildBtn').addEventListener('click', async () => {
-  const firstName = window.prompt("New child's first name?");
+  const firstName = window.prompt("New rider's first name?");
   if (!firstName || !firstName.trim()) return;
   const errorEl = document.getElementById('myChildrenError');
   showError(errorEl, '');
@@ -783,6 +821,9 @@ document.getElementById('closeMyChildren').addEventListener('click', closeMyChil
 
 function renderAll() {
   document.getElementById('carpoolName').textContent = carpool.name;
+  const activityEl = document.getElementById('activitySummary');
+  activityEl.textContent = [carpool.activityName, carpool.activityLocation].filter(Boolean).join(' · ');
+  activityEl.classList.toggle('hidden', !activityEl.textContent);
   document.getElementById('codeBadge').textContent = carpool.code;
   document.getElementById('whoami').textContent = `Signed in as ${identity.name}`;
   document.getElementById('editDatesBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
@@ -1018,7 +1059,7 @@ document.getElementById('homeBtn').addEventListener('click', () => {
 
 document.getElementById('leaveGroupBtn').addEventListener('click', () => {
   document.getElementById('leaveConfirmText').textContent =
-    `You'll be removed from "${carpool.name}" along with any children you've added. You'd need the join code to come back.`;
+    `You'll be removed from "${carpool.name}" along with any riders you've added. You'd need the join code to come back.`;
   showError(document.getElementById('leaveError'), '');
   document.getElementById('leaveConfirmOverlay').classList.remove('hidden');
   lockBodyScroll();

@@ -696,7 +696,7 @@ document.getElementById('codeBadge').addEventListener('click', async () => {
 
 document.getElementById('membersBtn').addEventListener('click', openMembersOverlay);
 document.getElementById('closeMembersOverlay').addEventListener('click', dismissMembersOverlay);
-document.getElementById('myChildrenBtn').addEventListener('click', openMyChildrenOverlay);
+document.getElementById('myChildrenBtn').addEventListener('click', () => withMe(openMyChildrenOverlay));
 document.getElementById('editDatesBtn').addEventListener('click', openDateEditor);
 
 // ---- My children overlay ----
@@ -849,11 +849,55 @@ async function fetchSchedule() {
   return res.json();
 }
 
+function findMe() {
+  return (carpool && carpool.members.find((m) => m.id === identity.id)) || null;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Netlify Blobs reads are eventually consistent, so right after joining, the
+// first load can come back without the member who just joined. Keep
+// re-fetching for a few seconds before concluding they're really missing.
+const MEMBER_RETRY_ATTEMPTS = 6;
+const MEMBER_RETRY_DELAY_MS = 1500;
+
+async function waitForMyMembership() {
+  for (let i = 0; i < MEMBER_RETRY_ATTEMPTS && !findMe(); i++) {
+    await sleep(MEMBER_RETRY_DELAY_MS);
+    await refreshCarpoolAndSchedule();
+  }
+  return findMe();
+}
+
+function showMemberNotFound() {
+  document.getElementById('memberNotFoundCard').classList.remove('hidden');
+}
+
+document.getElementById('rejoinBtn').addEventListener('click', () => {
+  sessionStorage.removeItem(`carpool:${code}`);
+  window.location.href = `/?code=${encodeURIComponent(code)}&tab=members`;
+});
+
+// Member-only overlays need the member record; if it isn't loaded, try
+// refreshing once more before giving up with an explanation.
+async function withMe(open) {
+  if (findMe() || (await waitForMyMembership())) {
+    renderAll();
+    open();
+  } else {
+    showMemberNotFound();
+  }
+}
+
 async function loadAll() {
   const errorEl = document.getElementById('loadError');
   try {
     [carpool, scheduleData] = await Promise.all([fetchCarpool(), fetchSchedule()]);
     renderAll();
+    if (!findMe()) {
+      if (await waitForMyMembership()) renderAll();
+      else showMemberNotFound();
+    }
   } catch (err) {
     errorEl.textContent = err.message;
     errorEl.classList.remove('hidden');
@@ -1154,7 +1198,7 @@ function dismissMyAddressesOverlay() {
   unlockBodyScroll();
 }
 
-document.getElementById('myAddressesBtn').addEventListener('click', openMyAddressesOverlay);
+document.getElementById('myAddressesBtn').addEventListener('click', () => withMe(openMyAddressesOverlay));
 document.getElementById('closeMyAddresses').addEventListener('click', dismissMyAddressesOverlay);
 document.getElementById('addMyAddressBtn').addEventListener('click', () => {
   addressDraft.push({ id: null, address: '' });

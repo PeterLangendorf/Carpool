@@ -19,6 +19,17 @@
   --danger: #c23a26;
   --danger-tint: #fbe9e5;
   --ok: #2f7d4f;
+
+  /* Calendar day colors (the original scheme): green = you drive, grey =
+     someone else drives, red = needs a driver. */
+  --cal-mine-bg: #4ade80;
+  --cal-mine-border: #16a34a;
+  --cal-mine-text: #052e12;
+  --cal-notme-bg: #d7dbe0;
+  --cal-notme-text: #20242c;
+  --cal-red-bg: #fde2e2;
+  --cal-red-border: #dc2626;
+  --cal-red-text: #7f1d1d;
   --radius: 14px;
   --radius-sm: 10px;
   --shadow: 0 1px 2px rgba(21, 32, 59, 0.06), 0 4px 14px rgba(21, 32, 59, 0.05);
@@ -1405,20 +1416,21 @@ button.hero-create:active {
 }
 
 .cal-cell.not-mine {
-  background: var(--surface);
-  border-color: var(--hair);
+  background: var(--cal-notme-bg);
+  border-color: var(--cal-notme-bg);
+  color: var(--cal-notme-text);
 }
 
 .cal-cell.mine {
-  background: var(--sun-tint);
-  border-color: var(--sun);
-  color: var(--sun-ink);
+  background: var(--cal-mine-bg);
+  border-color: var(--cal-mine-border);
+  color: var(--cal-mine-text);
 }
 
 .cal-cell.no-driver {
-  background: var(--danger-tint);
-  border-color: var(--danger);
-  color: var(--danger);
+  background: var(--cal-red-bg);
+  border: 2px solid var(--cal-red-border);
+  color: var(--cal-red-text);
 }
 
 .cal-cell.past {
@@ -1458,8 +1470,9 @@ button.hero-create:active {
   color: var(--muted);
 }
 
-.cal-cell.mine .cal-leg {
-  color: var(--sun-ink);
+.cal-cell.mine .cal-leg,
+.cal-cell.not-mine .cal-leg {
+  color: inherit;
 }
 
 .cal-leg.is-me {
@@ -1467,11 +1480,11 @@ button.hero-create:active {
 }
 
 .cal-cell.mine .cal-leg.is-me {
-  color: var(--ink);
+  color: var(--cal-mine-text);
 }
 
 .cal-leg.is-missing {
-  color: var(--danger);
+  color: var(--cal-red-text);
 }
 
 /* Picker calendars (create flow, date editor). */
@@ -1529,18 +1542,18 @@ button.hero-create:active {
   width: 12px;
   height: 12px;
   border-radius: 4px;
-  border: 1px solid var(--hair);
-  background: var(--surface);
+  border: 1px solid var(--cal-notme-bg);
+  background: var(--cal-notme-bg);
 }
 
 .cal-legend i.mine {
-  background: var(--sun-tint);
-  border-color: var(--sun);
+  background: var(--cal-mine-bg);
+  border-color: var(--cal-mine-border);
 }
 
 .cal-legend i.no-driver {
-  background: var(--danger-tint);
-  border-color: var(--danger);
+  background: var(--cal-red-bg);
+  border-color: var(--cal-red-border);
 }
 
 /* ---------------------------------------------------------------- dashboard */

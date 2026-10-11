@@ -101,7 +101,8 @@ There is no long-running server process — see `netlify.toml` for the redirect 
 ### UI conventions
 
 - Look and feel lives in `public/style.css`: color tokens on `:root` (brand navy `--navy`
-  from the wordmark, school-bus yellow `--sun` for "your turn", warm `--paper` background),
+  from the wordmark, school-bus yellow `--sun` for "your turn", warm `--paper` background;
+  calendar days keep the original green / grey / red scheme via the `--cal-*` tokens),
   system fonts (headings in `ui-rounded`, i.e. SF Pro Rounded on iPhone). No emoji in the UI:
   icons are small inline SVG line icons (`.icon`; `ICONS` in `dashboard.js`).
 - `showScreen` in `app.js` slides screens forward/back along each journey's order; overlays

@@ -628,9 +628,17 @@ async function linkMembersByEmail(userId, verifiedEmails, code) {
   return carpools;
 }
 
-// Every carpool, for the signed-in user's "Your carpools" list. Read-only.
+// Every carpool, for the signed-in user's "Your carpools" list, with recurring
+// dates rolled forward like getCarpool() does (one save if any changed).
 async function getAllCarpools() {
-  return Object.values((await load()).carpools);
+  const db = await load();
+  const carpools = Object.values(db.carpools);
+  let changed = false;
+  carpools.forEach((carpool) => {
+    if (materializeRecurrence(carpool)) changed = true;
+  });
+  if (changed) await save(db);
+  return carpools;
 }
 
 function tokensMatch(a, b) {

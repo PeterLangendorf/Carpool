@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="theme-color" content="#eaf4fc" />
+<meta name="theme-color" content="#174597" />
 <link rel="manifest" href="/manifest.json" />
 <link rel="icon" href="/img/app-icon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="/img/app-icon.svg" />
@@ -15,20 +15,21 @@
 <body>
 <script src="/loader.js"></script>
 
-<div class="page">
-  <div class="header-row">
-    <div class="header-title-row">
-      <img src="/img/app-icon.svg" alt="" class="site-logo" />
-      <div>
-        <h1 id="carpoolName">Carpool</h1>
-        <p class="subtitle hidden" id="activitySummary"></p>
-        <p class="subtitle" id="whoami"></p>
-      </div>
+<div class="page dash">
+  <!-- Navy band: back link, title, join code; the tabs below stick to the top. -->
+  <header class="dash-band">
+    <div class="dash-top">
+      <button type="button" id="homeBtn" class="top-back"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Home</span></button>
+      <span class="code-badge" id="codeBadge" role="button" tabindex="0" aria-label="Join code, tap to copy"></span>
     </div>
-    <span class="code-badge" id="codeBadge" role="button" tabindex="0"></span>
-  </div>
-
-  <div class="stats-row" id="statsRow"></div>
+    <h1 id="carpoolName">Carpool</h1>
+    <p class="dash-sub hidden" id="activitySummary"></p>
+  </header>
+  <nav class="tabs" role="tablist" aria-label="Carpool sections">
+    <button type="button" role="tab" class="tab active" data-tab="schedule" aria-selected="true">Schedule</button>
+    <button type="button" role="tab" class="tab" data-tab="people" aria-selected="false">People</button>
+    <button type="button" role="tab" class="tab" data-tab="settings" aria-selected="false">Settings</button>
+  </nav>
 
   <p class="error hidden" id="loadError"></p>
 
@@ -38,59 +39,80 @@
     <button type="button" id="rejoinBtn">Rejoin</button>
   </div>
 
-  <div id="problemsCard" class="card hidden">
-    <h2>⚠ Problems</h2>
-    <div id="problemsList" class="problems-list"></div>
-  </div>
-
-  <p class="subtitle hidden" id="noDatesMessage"></p>
-  <button type="button" id="addDatesBtn" class="hidden">Add carpool dates</button>
-
-  <div>
-    <h2>Upcoming carpools</h2>
-    <div class="calendar-header" id="calendarHeader"></div>
-    <div class="calendar-grid" id="calendarGrid"></div>
-  </div>
-
-  <div id="dayDetails" class="day-card hidden"></div>
-
-  <div class="action-bar">
-    <button type="button" id="membersBtn" class="action-btn">
-      <span class="action-icon">👥</span><span>Members</span>
-    </button>
-    <button type="button" id="myChildrenBtn" class="action-btn">
-      <span class="action-icon">🧒</span><span>My riders</span>
-    </button>
-    <button type="button" id="myAddressesBtn" class="action-btn">
-      <span class="action-icon">📍</span><span>My addresses</span>
-    </button>
-    <button type="button" id="editDetailsBtn" class="action-btn hidden">
-      <span class="action-icon">⚽</span><span>Edit activity</span>
-    </button>
-    <button type="button" id="emailEveryoneBtn" class="action-btn hidden">
-      <span class="action-icon">✉️</span><span>Email everyone</span>
-    </button>
-    <button type="button" id="editDatesBtn" class="action-btn hidden">
-      <span class="action-icon">✏️</span><span>Edit dates</span>
-    </button>
-    <button type="button" id="homeBtn" class="action-btn">
-      <span class="action-icon">🏠</span><span>Home</span>
-    </button>
-    <button type="button" id="leaveGroupBtn" class="action-btn danger">
-      <span class="action-icon">🚪</span><span>Leave group</span>
-    </button>
-  </div>
-</div>
-
-<!-- Members overlay -->
-<div class="overlay hidden" id="membersOverlay">
-  <div class="overlay-card">
-    <div class="header-row">
-      <h2>Members</h2>
-      <button type="button" id="closeMembersOverlay" class="ghost overlay-close-btn">Close</button>
+  <!-- SCHEDULE -->
+  <section class="tab-panel" data-panel="schedule">
+    <div id="problemsCard" class="card problems-card hidden">
+      <h2><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 4.3 2.6 17.6A2 2 0 0 0 4.3 20.6h15.4a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/></svg>Rides that need attention</h2>
+      <div id="problemsList" class="problems-list"></div>
     </div>
-    <div id="memberList" class="member-list"></div>
-  </div>
+
+    <p class="subtitle hidden" id="noDatesMessage"></p>
+    <button type="button" id="addDatesBtn" class="hidden">Add carpool dates</button>
+
+    <div class="calendar-block">
+      <h2 class="section-title">Next four weeks</h2>
+      <div class="calendar-header" id="calendarHeader"></div>
+      <div class="calendar-grid" id="calendarGrid"></div>
+      <p class="cal-legend">
+        <span><i class="mine"></i>You drive</span>
+        <span><i></i>Someone else</span>
+        <span><i class="no-driver"></i>Needs a driver</span>
+        <span>Top: drop off · Bottom: pick up</span>
+      </p>
+    </div>
+
+    <div id="dayDetails" class="day-card hidden"></div>
+  </section>
+
+  <!-- PEOPLE -->
+  <section class="tab-panel hidden" data-panel="people">
+    <div>
+      <h2 class="section-title">Members</h2>
+      <p class="subtitle section-note">Drive counts include every ride scheduled from today on.</p>
+      <div id="memberList" class="member-list card"></div>
+    </div>
+    <div>
+      <h2 class="section-title">You</h2>
+      <div class="menu-group">
+      <button type="button" id="myChildrenBtn" class="menu-row">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3"/><path d="M6.5 20v-1.8A5.5 5.5 0 0 1 12 12.7a5.5 5.5 0 0 1 5.5 5.5V20"/></svg><span class="menu-label">Your riders</span><svg class="icon menu-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <button type="button" id="myAddressesBtn" class="menu-row">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.7-6.5-11.1a6.5 6.5 0 0 1 13 0C18.5 15.3 12 21 12 21z"/><circle cx="12" cy="9.9" r="2.3"/></svg><span class="menu-label">Your addresses</span><svg class="icon menu-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="tab-panel hidden" data-panel="settings">
+    <div class="hidden" id="organizerMenu">
+      <h2 class="section-title">Organizer</h2>
+      <div class="menu-group">
+      <button type="button" id="editDetailsBtn" class="menu-row hidden">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 21V4.5"/><path d="M5.5 4.5h11.5l-2.2 4.2 2.2 4.3H5.5"/></svg><span class="menu-label">Edit activity</span><svg class="icon menu-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <button type="button" id="editDatesBtn" class="menu-row hidden">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg><span class="menu-label">Edit dates and times</span><svg class="icon menu-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <button type="button" id="emailEveryoneBtn" class="menu-row hidden">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.8 7l8.2 6.2L20.2 7"/></svg><span class="menu-label">Email everyone</span><svg class="icon menu-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      </div>
+    </div>
+    <div>
+      <h2 class="section-title">This carpool</h2>
+      <div class="menu-group">
+        <button type="button" id="copyCodeRow" class="menu-row">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></svg><span class="menu-label">Copy join code</span><span class="menu-value" id="copyCodeValue"></span>
+        </button>
+      <button type="button" id="leaveGroupBtn" class="menu-row danger">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4.5H6.5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1H14"/><path d="M10.5 12H20M16.5 8.5 20 12l-3.5 3.5"/></svg><span class="menu-label">Leave carpool</span><svg class="icon menu-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      </div>
+    </div>
+    <p class="subtitle settings-whoami" id="whoami"></p>
+  </section>
 </div>
 
 <!-- My riders overlay -->

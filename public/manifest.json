@@ -3,8 +3,8 @@
   "short_name": "Carpool",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#eaf4fc",
-  "theme_color": "#eaf4fc",
+  "background_color": "#f7f4ee",
+  "theme_color": "#f7f4ee",
   "icons": [
     {
       "src": "/img/app-icon.svg",

@@ -21,6 +21,17 @@ if (!code) {
 // server's `me` once the carpool loads.
 let identity = null;
 let carpool = null;
+
+// Line icons for rendered HTML (24px grid, stroked with currentColor; see .icon).
+const ICONS = {
+  car: '<path d="M5 16.5H3.5V12l2.3-5h12.4l2.3 5v4.5H19"/><circle cx="7.5" cy="16.5" r="2"/><circle cx="16.5" cy="16.5" r="2"/><path d="M9.5 16.5h5M4 12h16"/>',
+  warning: '<path d="M10.3 4.3 2.6 17.6A2 2 0 0 0 4.3 20.6h15.4a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/>',
+  route: '<path d="M12 3 19.5 20 12 16l-7.5 4L12 3z"/>',
+};
+
+function icon(name) {
+  return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
+}
 let scheduleData = null;
 
 function showError(el, message) {
@@ -120,6 +131,11 @@ function renderCalendarHeader(container) {
 
 // ---- Leg-day-picker: one row per active weekday, with Drop off/Pick up checkboxes ----
 
+// A ride option's label: the leg, with its time on a second line.
+function legLabelHtml(leg, time) {
+  return time ? `<span class="leg-name">${leg}</span><span class="leg-time">${formatTimeShort(time)}</span>` : `<span class="leg-name">${leg}</span>`;
+}
+
 function renderLegDayPicker(container, weekdays, timeResolver, selected) {
   container.innerHTML = '';
   if (!weekdays || !weekdays.length) {
@@ -130,8 +146,8 @@ function renderLegDayPicker(container, weekdays, timeResolver, selected) {
   const selBack = new Set((selected && selected.backDays) || []);
   weekdays.forEach((w) => {
     const times = timeResolver ? timeResolver(w) : null;
-    const thereLabel = times && times.there ? `Drop off · ${formatTimeShort(times.there)}` : 'Drop off';
-    const backLabel = times && times.back ? `Pick up · ${formatTimeShort(times.back)}` : 'Pick up';
+    const thereLabel = legLabelHtml('Drop off', times && times.there);
+    const backLabel = legLabelHtml('Pick up', times && times.back);
     const row = document.createElement('div');
     row.className = 'leg-day-row';
     row.innerHTML = `
@@ -204,7 +220,7 @@ function unlockBodyScroll() {
   }
 }
 
-['membersOverlay', 'leaveConfirmOverlay', 'dateEditorOverlay', 'routeOverlay', 'myChildrenOverlay', 'timePickerOverlay', 'myAddressesOverlay', 'detailsOverlay', 'emailOverlay'].forEach((id) => {
+['leaveConfirmOverlay', 'dateEditorOverlay', 'routeOverlay', 'myChildrenOverlay', 'timePickerOverlay', 'myAddressesOverlay', 'detailsOverlay', 'emailOverlay'].forEach((id) => {
   const el = document.getElementById(id);
   el.addEventListener(
     'touchmove',
@@ -217,17 +233,31 @@ function unlockBodyScroll() {
 
 // ---- Main dashboard render ----
 
-function renderStats() {
-  const statsRow = document.getElementById('statsRow');
-  statsRow.innerHTML = '';
-  carpool.members.forEach((m) => {
-    const pill = document.createElement('span');
-    pill.className = 'stat-pill';
-    const count = scheduleData.driveCounts[m.id] || 0;
-    pill.innerHTML = `${m.id === identity.id ? 'You' : m.name}: <strong>${count}</strong> drive${count === 1 ? '' : 's'}`;
-    statsRow.appendChild(pill);
+// ---- Tabs (Schedule / People / Settings) ----
+
+function showTab(name) {
+  document.querySelectorAll('.tabs .tab').forEach((tab) => {
+    const on = tab.dataset.tab === name;
+    tab.classList.toggle('active', on);
+    tab.setAttribute('aria-selected', String(on));
   });
+  document.querySelectorAll('.tab-panel').forEach((panel) => {
+    const on = panel.dataset.panel === name;
+    panel.classList.toggle('hidden', !on);
+    if (on) {
+      panel.classList.remove('enter-fade');
+      void panel.offsetWidth; // restart the fade-in
+      panel.classList.add('enter-fade');
+    }
+  });
+  // Keep the tabs in view when switching from far down a long panel.
+  const tabs = document.querySelector('.tabs');
+  if (tabs.getBoundingClientRect().top < 0 || window.scrollY > tabs.offsetTop) window.scrollTo(0, tabs.offsetTop);
 }
+
+document.querySelectorAll('.tabs .tab').forEach((tab) => {
+  tab.addEventListener('click', () => showTab(tab.dataset.tab));
+});
 
 const PROBLEMS_CAP = 4;
 let problemsExpanded = false;
@@ -317,17 +347,12 @@ function combineStatus(a, b) {
   return STATUS_PRIORITY[Math.max(STATUS_PRIORITY.indexOf(a), STATUS_PRIORITY.indexOf(b))];
 }
 
-function legLine(leg, arrow) {
-  if (!leg || leg.children.length === 0) return '';
-  let text;
-  if (leg.noDriverAvailable) {
-    text = '⚠';
-  } else if (leg.drivers.some((d) => d.id === identity.id)) {
-    text = 'You';
-  } else {
-    text = initials(leg.drivers[0].name) + (leg.drivers.length > 1 ? '+1' : '');
-  }
-  return `<span class="cal-leg">${arrow} ${text}</span>`;
+// One line per ride in a calendar day: drop off on top, pick up below.
+function legLine(leg) {
+  if (!leg || leg.children.length === 0) return '<span class="cal-leg">&nbsp;</span>';
+  if (leg.noDriverAvailable) return '<span class="cal-leg is-missing">None</span>';
+  if (leg.drivers.some((d) => d.id === identity.id)) return '<span class="cal-leg is-me">You</span>';
+  return `<span class="cal-leg">${initials(leg.drivers[0].name)}${leg.drivers.length > 1 ? '+' : ''}</span>`;
 }
 
 function renderMainCalendar() {
@@ -364,8 +389,7 @@ function renderMainCalendar() {
 
     cell.innerHTML = `
       <span class="cal-daynum">${date.getDate()}</span>
-      ${entry ? legLine(entry.there, '→') : ''}
-      ${entry ? legLine(entry.back, '←') : ''}
+      ${entry ? legLine(entry.there) + legLine(entry.back) : ''}
     `;
     cell.addEventListener('click', () => selectDay(dateKey));
     grid.appendChild(cell);
@@ -388,7 +412,7 @@ function renderChildrenSection(entry, isMine) {
     .join('');
   return `
     <div class="pickup-list">
-      <div class="pickup-list-title">🧒 Riders you're driving</div>
+      <div class="pickup-list-title">Riders you're driving</div>
       <ul class="pickup-items">${items}</ul>
     </div>
   `;
@@ -459,7 +483,7 @@ function wireChildToggles(dateKey) {
     showError(errorEl, '');
     try {
       await saveChildChanges(dateKey, changes);
-      renderStats();
+      renderMembers();
       renderMainCalendar();
       renderProblems();
       selectDay(dateKey);
@@ -494,7 +518,7 @@ function mapsLink(address, text) {
 
 function activityStopHtml(title, note) {
   const location = carpool.activityLocation;
-  const label = `🏁 ${location || 'Activity'}`;
+  const label = location || 'Activity';
   return `
     <div class="route-stop route-stop-final">
       <div class="route-address">${location ? mapsLink(location, label) : escapeHtml(label)}</div>
@@ -571,7 +595,7 @@ function renderLeg(entry, legData, time, label) {
     return `
       <div class="leg-block">
         <div class="date-row"><strong>${label}</strong><span>${timeStr}</span></div>
-        <div class="warning">⚠ No drivers are available for this ride.</div>
+        <div class="warning">${icon('warning')}<span>No one is available to drive this ride.</span></div>
       </div>
     `;
   }
@@ -583,12 +607,12 @@ function renderLeg(entry, legData, time, label) {
     <div class="leg-block">
       <div class="date-row"><strong>${label}</strong><span>${timeStr}</span></div>
       <div class="driver-row">
-        🚗 Driver${legData.drivers.length > 1 ? 's' : ''}: ${driverNames}
-        ${isMine ? '<span class="you-tag">YOUR TURN</span>' : ''}
+        ${icon('car')}<span>${driverNames}</span>
+        ${isMine ? '<span class="you-tag">Your turn</span>' : ''}
       </div>
       ${renderChildrenSection(legData, isMine)}
-      ${legData.overCapacity ? `<div class="warning">⚠ Not enough seats for everyone on this ride (${legData.strandedCount} may need another ride).</div>` : ''}
-      ${isMine ? `<button type="button" class="secondary start-route-btn" data-leg="${legKey}">🧭 Start route</button>` : ''}
+      ${legData.overCapacity ? `<div class="warning">${icon('warning')}<span>Not enough seats for everyone (${legData.strandedCount} may need another ride).</span></div>` : ''}
+      ${isMine ? `<button type="button" class="secondary start-route-btn" data-leg="${legKey}">${icon('route')}Start route</button>` : ''}
     </div>
   `;
 }
@@ -604,6 +628,9 @@ function selectDay(dateKey) {
 
   panel.classList.remove('hidden');
   panel.classList.remove('mine');
+  panel.classList.remove('swap');
+  void panel.offsetWidth; // restart the fade-in
+  panel.classList.add('swap');
 
   if (!entry) {
     panel.innerHTML = `
@@ -663,26 +690,19 @@ function renderMembers() {
     const isOwnerRow = m.id === carpool.ownerId;
     const isMe = m.id === identity.id;
     const childCount = (m.children || []).length;
-    const label = `${m.name}${isMe ? ' (you)' : ''}${isOwnerRow ? ' · owner' : ''} — ${childCount} ${childCount === 1 ? 'rider' : 'riders'}`;
+    const drives = scheduleData.driveCounts[m.id] || 0;
+    const meta = [isOwnerRow ? 'Organizer' : null, `${childCount} ${childCount === 1 ? 'rider' : 'riders'}`, `${m.seats} ${m.seats === 1 ? 'seat' : 'seats'}`]
+      .filter(Boolean)
+      .join(' · ');
 
     const row = document.createElement('div');
     row.className = 'member-row';
-    row.textContent = label;
+    row.innerHTML = `
+      <span class="member-avatar" aria-hidden="true">${escapeHtml(initials(m.name))}</span>
+      <span class="member-text"><strong>${escapeHtml(m.name)}${isMe ? ' (you)' : ''}</strong><span class="member-row-meta">${escapeHtml(meta)}</span></span>
+      <span class="member-drives"><strong>${drives}</strong>${drives === 1 ? 'drive' : 'drives'}</span>`;
     list.appendChild(row);
   });
-}
-
-function openMembersOverlay() {
-  renderMembers();
-  document.getElementById('membersOverlay').classList.remove('hidden');
-  lockBodyScroll();
-}
-
-// Named differently from the #closeMembersOverlay button itself — see the
-// note on dismissRouteOverlay above.
-function dismissMembersOverlay() {
-  document.getElementById('membersOverlay').classList.add('hidden');
-  unlockBodyScroll();
 }
 
 document.getElementById('codeBadge').addEventListener('click', async () => {
@@ -690,8 +710,11 @@ document.getElementById('codeBadge').addEventListener('click', async () => {
   if (await copyTextToClipboard(carpool.code)) flashCopiedFeedback(el, carpool.code);
 });
 
-document.getElementById('membersBtn').addEventListener('click', openMembersOverlay);
-document.getElementById('closeMembersOverlay').addEventListener('click', dismissMembersOverlay);
+document.getElementById('copyCodeRow').addEventListener('click', async () => {
+  const el = document.getElementById('copyCodeValue');
+  if (await copyTextToClipboard(carpool.code)) flashCopiedFeedback(el, carpool.code);
+});
+
 document.getElementById('myChildrenBtn').addEventListener('click', () => withMe(openMyChildrenOverlay));
 document.getElementById('editDatesBtn').addEventListener('click', openDateEditor);
 
@@ -821,11 +844,12 @@ function renderAll() {
   activityEl.textContent = [carpool.activityName, carpool.activityLocation].filter(Boolean).join(' · ');
   activityEl.classList.toggle('hidden', !activityEl.textContent);
   document.getElementById('codeBadge').textContent = carpool.code;
+  document.getElementById('copyCodeValue').textContent = carpool.code;
   document.getElementById('whoami').textContent = `Signed in as ${identity.name}`;
   document.getElementById('editDatesBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
   document.getElementById('editDetailsBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
   document.getElementById('emailEveryoneBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
-  renderStats();
+  document.getElementById('organizerMenu').classList.toggle('hidden', identity.id !== carpool.ownerId);
   renderProblems();
   renderDatesStatus();
   renderCalendarHeader(document.getElementById('calendarHeader'));

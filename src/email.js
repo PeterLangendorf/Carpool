@@ -123,21 +123,21 @@ function monthName() {
 function drivesHtml(rows) {
   const heading = `<h3 style="font-size:16px;margin:24px 0 8px">Your drives for the rest of ${monthName()}</h3>`;
   if (!rows.length) {
-    return `${heading}<p style="font-size:14px;color:#6b7280">You're not scheduled to drive for the rest of ${monthName()}.</p>`;
+    return `${heading}<p style="font-size:14px;color:#646a7b">You're not scheduled to drive for the rest of ${monthName()}.</p>`;
   }
-  const cell = 'padding:8px;border-bottom:1px solid #d3e6f7;vertical-align:top;font-size:14px';
-  const head = 'padding:8px;border-bottom:2px solid #d3e6f7;text-align:left;font-size:12px;color:#6b7280';
+  const cell = 'padding:8px;border-bottom:1px solid #e3ded3;vertical-align:top;font-size:14px';
+  const head = 'padding:8px;border-bottom:2px solid #e3ded3;text-align:left;font-size:12px;color:#646a7b';
   const body = rows
     .map((r) => {
       const stops = r.stops
         .map((st, i) => {
           const place = st.address
-            ? `<a href="${escapeHtml(mapsUrl(st.address))}" style="color:#0ea5e9;font-weight:600;text-decoration:none">${escapeHtml(st.address)}</a>`
-            : '<span style="color:#6b7280">No address on file</span>';
-          return `<div style="margin-bottom:4px">${i + 1}. ${place}<br><span style="color:#6b7280;font-size:12px">${escapeHtml(st.note)}</span></div>`;
+            ? `<a href="${escapeHtml(mapsUrl(st.address))}" style="color:#174597;font-weight:600;text-decoration:none">${escapeHtml(st.address)}</a>`
+            : '<span style="color:#646a7b">No address on file</span>';
+          return `<div style="margin-bottom:4px">${i + 1}. ${place}<br><span style="color:#646a7b;font-size:12px">${escapeHtml(st.note)}</span></div>`;
         })
         .join('');
-      return `<tr><td style="${cell};white-space:nowrap">${escapeHtml(formatDate(r.date))}</td><td style="${cell};white-space:nowrap">${escapeHtml(r.ride)}<br><span style="color:#6b7280">${escapeHtml(formatTime(r.time))}</span></td><td style="${cell}">${stops}</td></tr>`;
+      return `<tr><td style="${cell};white-space:nowrap">${escapeHtml(formatDate(r.date))}</td><td style="${cell};white-space:nowrap">${escapeHtml(r.ride)}<br><span style="color:#646a7b">${escapeHtml(formatTime(r.time))}</span></td><td style="${cell}">${stops}</td></tr>`;
     })
     .join('');
   return `${heading}
@@ -145,7 +145,7 @@ function drivesHtml(rows) {
         <tr><th style="${head}">Date</th><th style="${head}">Ride</th><th style="${head}">Stops</th></tr>
         ${body}
       </table>
-      <p style="font-size:12px;color:#6b7280">This is the schedule as of today. It can change as people join or update their availability, so check the app for the latest.</p>`;
+      <p style="font-size:12px;color:#646a7b">This is the schedule as of today. It can change as people join or update their availability, so check the app for the latest.</p>`;
 }
 
 function drivesText(rows) {
@@ -220,28 +220,28 @@ function buildSummary(carpool, member, siteUrl, scheduleInfo, options = {}) {
   ].join('\n');
 
   const html = `
-    <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#14161a;background:#ffffff;padding:20px;border-radius:12px;max-width:560px">
+    <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#15203b;background:#ffffff;padding:20px;border-radius:12px;max-width:560px">
       <p>Hi ${escapeHtml(member.name)},</p>
       <p>${escapeHtml(intro)}</p>
       ${
         ownerNote
-          ? `<div style="background:#f0f8ff;border:1px solid #9fd3f5;border-radius:12px;padding:12px 14px;margin:0 0 16px"><div style="font-size:12px;color:#6b7280;margin-bottom:4px">Message from ${escapeHtml(fromName)}</div><div style="white-space:pre-wrap">${escapeHtml(ownerNote)}</div></div>`
+          ? `<div style="background:#fff3cc;border:1px solid #f2b300;border-radius:12px;padding:12px 14px;margin:0 0 16px"><div style="font-size:12px;color:#646a7b;margin-bottom:4px">Message from ${escapeHtml(fromName)}</div><div style="white-space:pre-wrap">${escapeHtml(ownerNote)}</div></div>`
           : ''
       }
-      <p style="font-family:Menlo,monospace;font-size:28px;font-weight:700;letter-spacing:4px;text-align:center;padding:14px;border:2px dashed #0ea5e9;border-radius:12px;background:#eaf4fc">${escapeHtml(carpool.code)}</p>
+      <p style="font-family:Menlo,monospace;font-size:28px;font-weight:700;letter-spacing:4px;text-align:center;padding:14px;border:2px dashed #174597;border-radius:12px;background:#f7f4ee">${escapeHtml(carpool.code)}</p>
       <table style="border-collapse:collapse;font-size:14px">
         ${filled
           .map(
             ([k, v]) =>
-              `<tr><td style="padding:4px 12px 4px 0;color:#6b7280;vertical-align:top;white-space:nowrap">${escapeHtml(k)}</td><td style="padding:4px 0">${escapeHtml(v)}</td></tr>`
+              `<tr><td style="padding:4px 12px 4px 0;color:#646a7b;vertical-align:top;white-space:nowrap">${escapeHtml(k)}</td><td style="padding:4px 0">${escapeHtml(v)}</td></tr>`
           )
           .join('')}
       </table>
       ${drives ? drivesHtml(drives) : ''}
       <p>Share the join code with others in your carpool, or send them this link:<br><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p>
-      <p style="font-size:12px;color:#6b7280;border-top:1px solid #d3e6f7;padding-top:12px;margin-top:20px">
+      <p style="font-size:12px;color:#646a7b;border-top:1px solid #e3ded3;padding-top:12px;margin-top:20px">
         ${escapeHtml(footer)}
-        ${unsubscribe ? `<br><a href="${escapeHtml(unsubscribe)}" style="color:#6b7280">Unsubscribe</a> from update and monthly emails.` : ''}
+        ${unsubscribe ? `<br><a href="${escapeHtml(unsubscribe)}" style="color:#646a7b">Unsubscribe</a> from update and monthly emails.` : ''}
       </p>
     </div>
   `;

@@ -132,13 +132,27 @@ app.get('/api/config', (req, res) => {
 app.get('/api/my-carpools', requireUser, async (req, res) => {
   try {
     const list = await getUserCarpools(req.userId);
+    const todayKey = new Date().toISOString().slice(0, 10);
     res.json({
-      carpools: list.map(({ carpool, member }) => ({
-        code: carpool.code,
-        name: carpool.name,
-        activityName: carpool.activityName || '',
-        isOwner: member.id === getEffectiveOwnerId(carpool),
-      })),
+      carpools: list.map(({ carpool, member }) => {
+        // For the ticket: which weekdays it runs on and when the next one is.
+        const upcoming = (carpool.activityDates || []).filter((d) => d >= todayKey).sort();
+        const weekdays = [...new Set(upcoming.map((d) => new Date(d + 'T00:00:00Z').getUTCDay()))].sort();
+        const nextDate = upcoming[0] || null;
+        const nextTime = nextDate
+          ? store.resolveActivityTimes(normalizeActivityTimes(carpool.activityTimes), nextDate, new Date(nextDate + 'T00:00:00Z').getUTCDay()).there
+          : null;
+        return {
+          code: carpool.code,
+          name: carpool.name,
+          activityName: carpool.activityName || '',
+          isOwner: member.id === getEffectiveOwnerId(carpool),
+          memberCount: carpool.members.length,
+          weekdays,
+          nextDate,
+          nextTime,
+        };
+      }),
     });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });

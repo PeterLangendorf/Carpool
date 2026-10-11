@@ -88,11 +88,24 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   Nobody is asked to sign in until it's needed: when looking up a join code, or after the
   create flow's "All set!" popup (before "Add yourself"). The carpool details entered so far
   are saved to localStorage (`saveCreateDraft`) and restored on `/?resume=create`, since
-  signing in leaves the page. Signed-in people also get "Your carpools" (`GET
-  /api/my-carpools`). Joining by code calls `GET .../preview` (name + dates/times only);
-  people already in the carpool go straight to the dashboard.
-- `public/dashboard.html` + `public/dashboard.js` — the owner's carpool management view
-  (edit activity dates/times/recurrence, manage members/children, per-date exclusions).
+  signing in leaves the page. The home screen is a navy hero with "Create a carpool" and a
+  join-code box (the join-code screen remains for deep links and errors). Signed-in people
+  get a "Carpools" button there that opens their carpools as tickets (`GET
+  /api/my-carpools`, which also returns weekdays and the next ride). Joining by code calls
+  `GET .../preview` (name + dates/times only); people already in the carpool go straight to
+  the dashboard.
+- `public/dashboard.html` + `public/dashboard.js` — a carpool's page: navy band, then tabs
+  (`showTab`): Schedule (calendar, day details, per-date exclusions), People (members with
+  drive counts, your riders/addresses) and Settings (organizer tools, copy code, leave).
+
+### UI conventions
+
+- Look and feel lives in `public/style.css`: color tokens on `:root` (brand navy `--navy`
+  from the wordmark, school-bus yellow `--sun` for "your turn", warm `--paper` background),
+  system fonts (headings in `ui-rounded`, i.e. SF Pro Rounded on iPhone). No emoji in the UI:
+  icons are small inline SVG line icons (`.icon`; `ICONS` in `dashboard.js`).
+- `showScreen` in `app.js` slides screens forward/back along each journey's order; overlays
+  open as bottom sheets. All motion is disabled under `prefers-reduced-motion`.
 
 ### Domain model details worth knowing before editing
 

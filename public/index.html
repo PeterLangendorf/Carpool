@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="theme-color" content="#eaf4fc" />
+<meta name="theme-color" content="#f7f4ee" />
 <link rel="manifest" href="/manifest.json" />
 <link rel="icon" href="/img/app-icon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="/img/app-icon.svg" />
@@ -33,47 +33,49 @@
   </div>
 
   <!-- HOME: explains the app before any sign-in (Google's OAuth review requires a
-       public home page that describes the app and links the privacy policy). -->
+       public home page that describes the app and links the privacy policy). The
+       navy hero has its own top bar; the shared header is hidden here (body.on-home). -->
   <section class="screen home" data-screen="home">
-    <div class="card hidden" id="myCarpoolsCard">
-      <h2>Your carpools</h2>
-      <div id="myCarpoolsList" class="member-list"></div>
-    </div>
-
-    <div class="home-intro">
+    <div class="hero">
+      <div class="hero-top">
+        <img src="/img/carpooler-name.svg" alt="Carpooler" class="hero-logo" />
+        <div class="hero-actions">
+          <button type="button" class="carpools-btn hidden" id="carpoolsBtn"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h13A1.5 1.5 0 0 1 20 7.5V10a2 2 0 0 0 0 4v2.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 16.5V14a2 2 0 0 0 0-4V7.5z"/><path d="M14.5 6.5v11" stroke-dasharray="1.6 2.2"/></svg><span>Carpools</span><span class="carpools-count" id="carpoolsCount"></span></button>
+          <div class="hero-account" id="homeAccount"></div>
+        </div>
+      </div>
+      <p class="hero-eyebrow">Free for families</p>
       <h1>Share the driving to your kids' activities</h1>
-      <p class="home-lead">Carpooler is a free website that helps families who share rides to practices, lessons and other activities work out who drives when, fairly.</p>
+      <p class="hero-lead">Carpooler works out who drives when, fairly, for practices, lessons and anything else your families share rides to.</p>
+      <button type="button" class="hero-create" id="goCreateBtn">Create a carpool</button>
+      <form class="hero-join" id="homeJoinForm" novalidate>
+        <label for="homeJoinCode">Have a join code?</label>
+        <div class="hero-join-row">
+          <input type="text" id="homeJoinCode" placeholder="7K3PXM" maxlength="6" autocapitalize="characters" autocomplete="off" spellcheck="false" aria-label="Join code" />
+          <button type="submit" id="homeJoinSubmit">Join</button>
+        </div>
+        <p class="hero-join-error hidden" id="homeJoinError"></p>
+      </form>
     </div>
+    <img src="/img/rainbow-pennants.svg" alt="" class="hero-bunting" />
 
-    <div class="card">
+    <div class="how">
       <h2>How it works</h2>
-      <ol class="home-steps">
-        <li><strong>Create a carpool.</strong> Enter the activity, where it is, and which days and times it happens.</li>
-        <li><strong>Invite the other families.</strong> Share the carpool's 6-character code. Each family adds their riders, pickup addresses and the days they can drive.</li>
-        <li><strong>Get a fair schedule.</strong> Carpooler takes turns between drivers for every drop-off and pick-up, and shows each driver their riders and route.</li>
+      <ol class="route-steps">
+        <li><strong>Create a carpool</strong><span>Enter the activity, where it is, and which days and times it happens.</span></li>
+        <li><strong>Invite the other families</strong><span>Share the carpool's 6-character code. Each family adds their riders, pickup addresses and the days they can drive.</span></li>
+        <li class="route-steps-end"><strong>Get a fair schedule</strong><span>Carpooler takes turns between drivers for every drop-off and pick-up, and shows each driver their riders and route.</span></li>
       </ol>
     </div>
 
-    <div class="card">
-      <h2>Your information stays in your carpool</h2>
-      <p class="subtitle">You'll sign in with Google or your email address when you create or join a carpool. We use your name and email address to identify you and send you carpool updates. Addresses and riders' names are shown only to members of your carpool, and we never sell your information or use it for ads. See our <a href="/privacy">Privacy Policy</a>.</p>
+    <div class="privacy-note">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>
+      <div>
+        <h2>Your information stays in your carpool</h2>
+        <p>You'll sign in with Google or your email address when you create or join a carpool. We use your name and email address to identify you and send you carpool updates. Addresses and riders' names are shown only to members of your carpool, and we never sell your information or use it for ads. See our <a href="/privacy">Privacy Policy</a>.</p>
+      </div>
     </div>
 
-    <div>
-      <h2>Get started</h2>
-      <p class="subtitle">What would you like to do?</p>
-    </div>
-    <div class="home-buttons">
-      <button type="button" class="big-btn" id="goCreateBtn">
-        Create a carpool
-        <span class="big-btn-sub">Start a new carpool and get a join code</span>
-      </button>
-      <button type="button" class="big-btn secondary" id="goJoinBtn">
-        Join a carpool
-        <span class="big-btn-sub">Enter a code someone shared with you</span>
-      </button>
-    </div>
-    <img src="/img/rainbow-pennants.svg" alt="" class="home-banner" />
     <p class="footer-links"><a href="/privacy">Privacy policy</a> · <a href="/tos">Terms of service</a></p>
   </section>
 
@@ -528,12 +530,23 @@
 
 </div>
 
+<!-- Your carpools, as tickets (opened from the Carpools button on the home hero) -->
+<div class="overlay hidden" id="carpoolsOverlay">
+  <div class="overlay-card">
+    <div class="header-row">
+      <h2>Your carpools</h2>
+      <button type="button" id="closeCarpoolsOverlay" class="ghost overlay-close-btn">Close</button>
+    </div>
+    <div class="tickets" id="carpoolTickets"></div>
+  </div>
+</div>
+
 <!-- Brief "complete" confirmation after reviewing the carpool, before asking about the organizer -->
 <div class="overlay hidden" id="completePopupOverlay">
   <div class="overlay-card complete-popup-card">
-    <div class="complete-check">✓</div>
-    <p>All set!</p>
-    <p class="subtitle">Now let's add you and your rides!</p>
+    <div class="road" id="completeRoad"><div class="road-fill"></div></div>
+    <p class="complete-title">All set!</p>
+    <p class="subtitle">Now let's add you and your rides.</p>
   </div>
 </div>
 

@@ -40,6 +40,14 @@ const auth = (() => {
       signInUrl: '/sign-in',
       signUpUrl: '/sign-in',
       afterSignOutUrl: '/',
+      // Match the site's look (navy, system font) instead of Clerk's defaults.
+      appearance: {
+        variables: {
+          colorPrimary: '#174597',
+          borderRadius: '10px',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif',
+        },
+      },
     });
     return window.Clerk;
   })();

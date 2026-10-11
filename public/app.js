@@ -37,6 +37,11 @@ function escapeHtml(value) {
 // `addresses` (optional): when the member has more than one, each checked
 // ride gets a dropdown to pick which address it starts/ends at.
 // `selected.thereAddresses` / `backAddresses` map weekday -> address index.
+// A ride option's label: the leg, with its time on a second line.
+function legLabelHtml(leg, time) {
+  return time ? `<span class="leg-name">${leg}</span><span class="leg-time">${formatTimeShort(time)}</span>` : `<span class="leg-name">${leg}</span>`;
+}
+
 function renderLegDayPicker(container, weekdays, timeResolver, selected, addresses) {
   container.innerHTML = '';
   if (!weekdays || !weekdays.length) {
@@ -64,8 +69,8 @@ function renderLegDayPicker(container, weekdays, timeResolver, selected, address
   `;
   weekdays.forEach((w) => {
     const times = timeResolver ? timeResolver(w) : null;
-    const thereLabel = times && times.there ? `Drop off · ${formatTimeShort(times.there)}` : 'Drop off';
-    const backLabel = times && times.back ? `Pick up · ${formatTimeShort(times.back)}` : 'Pick up';
+    const thereLabel = legLabelHtml('Drop off', times && times.there);
+    const backLabel = legLabelHtml('Pick up', times && times.back);
     const row = document.createElement('div');
     row.className = 'leg-day-row';
     row.innerHTML = `
@@ -239,26 +244,48 @@ function showError(el, message) {
 }
 
 // The signed-in user's carpools (from the server, so they follow the user
-// across devices).
+// across devices), as tickets in a sheet opened from the home hero.
 async function renderMyCarpools() {
-  const card = document.getElementById('myCarpoolsCard');
-  const list = document.getElementById('myCarpoolsList');
+  const btn = document.getElementById('carpoolsBtn');
+  const list = document.getElementById('carpoolTickets');
   try {
     const { carpools } = await api('/api/my-carpools');
-    card.classList.toggle('hidden', carpools.length === 0);
+    btn.classList.toggle('hidden', carpools.length === 0);
+    document.getElementById('carpoolsCount').textContent = carpools.length;
     list.innerHTML = '';
     carpools.forEach((c) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'member-btn';
-      btn.innerHTML = `<span class="code-badge" style="margin-right:10px;">${escapeHtml(c.code)}</span>${escapeHtml(c.name)}`;
-      btn.addEventListener('click', () => goToDashboard(c.code));
-      list.appendChild(btn);
+      const days = (c.weekdays || []).map((w) => DAY_LABELS[w]).join(' · ');
+      const next = c.nextDate
+        ? `Next: ${FULL_DAY_LABELS[new Date(c.nextDate + 'T00:00:00').getDay()]}, ${formatDateShort(c.nextDate)}${c.nextTime ? ` at ${formatTimeShort(c.nextTime)}` : ''}`
+        : 'No upcoming dates';
+      const ticket = document.createElement('button');
+      ticket.type = 'button';
+      ticket.className = 'ticket';
+      ticket.innerHTML = `
+        <span class="ticket-main">
+          <span class="ticket-kicker">${c.isOwner ? 'Organizer' : 'Member'} · ${c.memberCount} ${c.memberCount === 1 ? 'family' : 'families'}</span>
+          <span class="ticket-name">${escapeHtml(c.name)}</span>
+          <span class="ticket-meta">${escapeHtml([c.activityName, days].filter(Boolean).join(' · '))}</span>
+          <span class="ticket-next">${escapeHtml(next)}</span>
+        </span>
+        <span class="ticket-stub"><span class="ticket-stub-label">Code</span><span class="ticket-code">${escapeHtml(c.code)}</span></span>`;
+      ticket.addEventListener('click', () => goToDashboard(c.code));
+      list.appendChild(ticket);
     });
   } catch {
-    card.classList.add('hidden');
+    btn.classList.add('hidden');
   }
 }
+
+document.getElementById('carpoolsBtn').addEventListener('click', () => {
+  document.getElementById('carpoolsOverlay').classList.remove('hidden');
+});
+document.getElementById('closeCarpoolsOverlay').addEventListener('click', () => {
+  document.getElementById('carpoolsOverlay').classList.add('hidden');
+});
+document.getElementById('carpoolsOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'carpoolsOverlay') e.currentTarget.classList.add('hidden');
+});
 
 // Fills the "your name" screens from the Clerk account; still editable.
 function prefillFromAccount(user) {
@@ -311,8 +338,40 @@ document.querySelectorAll('[data-daypicker]').forEach(renderDayPicker);
 
 // ---- Screen navigation ----
 const screens = document.querySelectorAll('.screen');
+let currentScreenName = null;
+
+// The order screens come in on each journey, so moving between them can
+// slide forward or back. Home comes before everything.
+function journeyOrder() {
+  return [
+    ['home', ...FLOWS.create.steps.flat(), FLOWS.create.doneScreen, ...FLOWS.createOwner.steps.flat(), FLOWS.createOwner.doneScreen],
+    ['home', ...FLOWS.join.steps.flat()],
+  ];
+}
+
+function screenDirection(from, to) {
+  for (const order of journeyOrder()) {
+    const a = order.indexOf(from);
+    const b = order.indexOf(to);
+    if (a >= 0 && b >= 0) return b > a ? 'forward' : 'back';
+  }
+  return 'fade';
+}
+
 function showScreen(name) {
-  screens.forEach((s) => s.classList.toggle('hidden', s.dataset.screen !== name));
+  const direction = screenDirection(currentScreenName, name);
+  screens.forEach((s) => {
+    const show = s.dataset.screen === name;
+    s.classList.toggle('hidden', !show);
+    s.classList.remove('enter-forward', 'enter-back', 'enter-fade');
+    if (show && currentScreenName && currentScreenName !== name) {
+      void s.offsetWidth; // restart the animation
+      s.classList.add(`enter-${direction}`);
+    }
+  });
+  currentScreenName = name;
+  document.body.classList.toggle('on-home', name === 'home');
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', name === 'home' ? '#174597' : '#f7f4ee');
   updateFlowProgress(name);
   window.scrollTo(0, 0);
 }
@@ -419,7 +478,6 @@ document.querySelectorAll('[data-back]').forEach((btn) => {
 });
 
 document.getElementById('goCreateBtn').addEventListener('click', () => showScreen('create-name'));
-document.getElementById('goJoinBtn').addEventListener('click', () => showScreen('join-code'));
 
 // ---- Join flow: step 1 (code) ----
 let joinedCode = null;
@@ -464,11 +522,24 @@ async function lookUpCarpool(rawCode) {
 
 // Joining is where an account is needed: signed-out people sign in first and
 // come back here with the code, which is then looked up automatically.
-document.getElementById('joinCodeForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const code = document.getElementById('joinCode').value.trim();
+async function joinWithCode(code) {
   if (!(await auth.currentUser())) return auth.redirectToSignIn(`/?code=${encodeURIComponent(code)}`, 'join');
+  document.getElementById('joinCode').value = code;
   lookUpCarpool(code);
+}
+
+document.getElementById('joinCodeForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  joinWithCode(document.getElementById('joinCode').value.trim());
+});
+
+document.getElementById('homeJoinForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const code = document.getElementById('homeJoinCode').value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const errorEl = document.getElementById('homeJoinError');
+  if (code.length !== 6) return showError(errorEl, 'Enter the 6-character code you were given.');
+  showError(errorEl, '');
+  joinWithCode(code);
 });
 
 // ---- Join flow: step 2+, a multi-screen wizard (mirrors the create wizard) ----
@@ -1077,6 +1148,8 @@ function goToConfirmStep() {
   showScreen('create-confirm');
 }
 
+document.getElementById('completeRoad').insertAdjacentHTML('beforeend', CAR_SVG);
+
 function showCompletePopupThen(callback) {
   const overlay = document.getElementById('completePopupOverlay');
   overlay.classList.remove('hidden');
@@ -1273,16 +1346,18 @@ if (resumingCreate) {
 // Signed in: account menu, "Your carpools", prefilled name/email. Signed out:
 // a "Sign in" link (no prompt).
 auth.currentUser().then((user) => {
-  const accountEl = document.getElementById('userButton');
+  const accountEls = [document.getElementById('userButton'), document.getElementById('homeAccount')];
   if (!user) {
     // Came back from the sign-in page without signing in: back to the review.
     if (resumingCreate) showScreen('create-confirm');
     auth.ready.then(() => {
-      accountEl.innerHTML = `<a class="sign-in-link" href="${escapeHtml(auth.signInUrl('/'))}">Sign in</a>`;
+      accountEls.forEach((el) => {
+        el.innerHTML = `<a class="sign-in-link" href="${escapeHtml(auth.signInUrl('/'))}">Sign in</a>`;
+      });
     }, () => {});
     return;
   }
-  auth.mountUserButton(accountEl);
+  accountEls.forEach((el) => auth.mountUserButton(el));
   prefillFromAccount(user);
   renderMyCarpools();
   if (initialCode && !resumingCreate) lookUpCarpool(initialCode);

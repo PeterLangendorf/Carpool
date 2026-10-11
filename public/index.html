@@ -13,10 +13,23 @@
 <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+<script src="/loader.js"></script>
+
 <div class="page">
 
   <div class="site-header">
     <img src="/img/carpooler-name.svg" alt="Carpooler" class="site-logo-lockup" />
+  </div>
+
+  <!-- Step progress for the create and join flows (driven by showScreen) -->
+  <div class="flow-progress hidden" id="flowProgress">
+    <div class="flow-progress-label">
+      <span id="flowProgressTitle"></span>
+      <span id="flowProgressStep"></span>
+    </div>
+    <div class="road" id="flowProgressRoad" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div class="road-fill"></div>
+    </div>
   </div>
 
   <!-- HOME -->

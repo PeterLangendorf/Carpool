@@ -968,3 +968,131 @@ textarea {
   font-family: inherit;
   resize: vertical;
 }
+
+/* A road-like progress bar with a car riding the leading edge of the fill
+   (car markup: CAR_SVG in loader.js). JS sets --progress (0 to 1) on .road.
+   Used by the page-open loader and the create/join step progress. */
+.road {
+  /* Car length up to its front bumper; the fill starts this long so the car
+     always sits on the road. */
+  --car-front: 46px;
+  --front: calc(var(--car-front) + var(--progress, 0) * (100% - var(--car-front)));
+  position: relative;
+  height: 8px;
+  margin-top: 28px;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.road-fill {
+  height: 100%;
+  width: var(--front);
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.road-car {
+  position: absolute;
+  bottom: calc(100% - 1px);
+  left: var(--front);
+  width: 50px;
+  height: 27px;
+  /* Line the front bumper (x = 46 of 50) up with the end of the fill. */
+  translate: -92% 0;
+  animation: car-bob 0.5s ease-in-out infinite alternate;
+}
+
+.car-body { fill: var(--accent); }
+.car-window { fill: #e0f2fe; }
+.car-light { fill: #fde047; }
+.car-taillight { fill: #ef4444; }
+.car-tire { fill: #1f2937; }
+.car-hub { fill: #cbd5e1; }
+
+.car-wheel {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: car-wheel-spin 0.6s linear infinite;
+}
+
+@keyframes car-bob {
+  from { transform: translateY(0); }
+  to { transform: translateY(-1.5px); }
+}
+
+@keyframes car-wheel-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Page-open loading screen (loader.js, on index.html and dashboard.html). */
+.page-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.page-loader.done {
+  animation: page-loader-out 0.3s ease forwards;
+}
+
+.page-loader-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.page-loader .road {
+  width: min(300px, calc(100vw - 64px));
+}
+
+.page-loader-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+@keyframes page-loader-out {
+  from { opacity: 1; }
+  to { opacity: 0; visibility: hidden; }
+}
+
+/* Create/join step progress (index.html, driven by showScreen in app.js). The
+   car drives between steps, and only spins its wheels while it's moving. */
+.flow-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.flow-progress .road-fill {
+  transition: width 0.6s ease-in-out;
+}
+
+.flow-progress .road-car {
+  transition: left 0.6s ease-in-out;
+}
+
+.flow-progress .road:not(.moving) .road-car,
+.flow-progress .road:not(.moving) .car-wheel {
+  animation: none;
+}
+
+.flow-progress .road.reversing .car-wheel {
+  animation-direction: reverse;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .road-car,
+  .car-wheel {
+    animation: none;
+  }
+}

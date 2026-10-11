@@ -6,3 +6,6 @@
 
 /style.css
   Cache-Control: public, max-age=0, must-revalidate
+
+/loader.js
+  Cache-Control: public, max-age=0, must-revalidate

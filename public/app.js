@@ -316,7 +316,97 @@ renderHistory();
 const screens = document.querySelectorAll('.screen');
 function showScreen(name) {
   screens.forEach((s) => s.classList.toggle('hidden', s.dataset.screen !== name));
+  updateFlowProgress(name);
   window.scrollTo(0, 0);
+}
+
+// ---- Create/join step progress ----
+// Each step lists the screens that count as it (branches like recurring vs.
+// specific dates share a step). Skipped steps (e.g. addresses when there are no
+// riders) just make the car jump ahead. `doneScreen` shows the bar full.
+const FLOWS = {
+  create: {
+    title: 'Create a carpool',
+    steps: [
+      ['create-name'],
+      ['create-yourname'],
+      ['create-seats'],
+      ['create-children'],
+      ['create-address'],
+      ['create-activity'],
+      ['create-datetype'],
+      ['create-dates-recurring', 'create-dates-specific'],
+      ['create-timesmode'],
+      ['create-times-uniform', 'create-times-perweekday', 'create-times-perdate'],
+      ['create-confirm'],
+      ['create-needsride'],
+      ['create-candrive'],
+    ],
+    doneScreen: 'create-success',
+  },
+  join: {
+    title: 'Join a carpool',
+    steps: [
+      ['join-code'],
+      ['join-members'],
+      ['join-new-name'],
+      ['join-new-seats'],
+      ['join-new-children'],
+      ['join-new-address'],
+      ['join-new-needsride'],
+      ['join-new-candrive'],
+    ],
+  },
+};
+
+const flowProgressEl = document.getElementById('flowProgress');
+const flowRoadEl = document.getElementById('flowProgressRoad');
+flowRoadEl.insertAdjacentHTML('beforeend', CAR_SVG);
+let flowProgressValue = 0;
+let flowMovingTimer = null;
+
+function updateFlowProgress(screenName) {
+  let flow = null;
+  let stepIndex = -1;
+  Object.values(FLOWS).forEach((f) => {
+    const i = f.steps.findIndex((screensInStep) => screensInStep.includes(screenName));
+    if (i >= 0 || f.doneScreen === screenName) {
+      flow = f;
+      stepIndex = i;
+    }
+  });
+  if (!flow) {
+    flowProgressEl.classList.add('hidden');
+    return;
+  }
+
+  const total = flow.steps.length;
+  const done = stepIndex < 0;
+  // Step 1 starts a little way in and the last step stops short of the end, so
+  // the bar only fills once the flow is actually finished.
+  const progress = done ? 1 : (stepIndex + 1) / (total + 1);
+  document.getElementById('flowProgressTitle').textContent = flow.title;
+  const stepText = done ? 'Done!' : `Step ${stepIndex + 1} of ${total}`;
+  document.getElementById('flowProgressStep').textContent = stepText;
+  flowRoadEl.setAttribute('aria-label', `${flow.title} progress`);
+  flowRoadEl.setAttribute('aria-valuenow', String(Math.round(progress * 100)));
+  flowRoadEl.setAttribute('aria-valuetext', stepText);
+
+  // Coming in from outside the flow, drive in from the start of the road.
+  if (flowProgressEl.classList.contains('hidden')) {
+    flowProgressValue = 0;
+    flowRoadEl.style.setProperty('--progress', '0');
+    flowProgressEl.classList.remove('hidden');
+    void flowRoadEl.offsetWidth; // commit the start position so the move animates
+  }
+  if (progress === flowProgressValue) return;
+
+  flowRoadEl.classList.toggle('reversing', progress < flowProgressValue);
+  flowRoadEl.classList.add('moving');
+  clearTimeout(flowMovingTimer);
+  flowMovingTimer = setTimeout(() => flowRoadEl.classList.remove('moving'), 600);
+  flowProgressValue = progress;
+  flowRoadEl.style.setProperty('--progress', String(progress));
 }
 
 document.querySelectorAll('[data-back]').forEach((btn) => {

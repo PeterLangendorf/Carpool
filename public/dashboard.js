@@ -834,13 +834,15 @@ function renderAll() {
   renderMembers();
 }
 
-// Throws with `notMember` set when the signed-in user isn't in this carpool.
+// Throws with `notMember` set when the signed-in user isn't in this carpool,
+// and `notFound` when there's no carpool with this code (yet).
 async function fetchCarpoolJson(path, fallbackMessage) {
   const res = await auth.fetch(path);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error((data.errors && data.errors.join(', ')) || fallbackMessage);
     err.notMember = Boolean(data.notMember);
+    err.notFound = res.status === 404;
     throw err;
   }
   return data;
@@ -897,15 +899,16 @@ async function loadAll() {
   await auth.requireSignIn();
   const errorEl = document.getElementById('loadError');
   try {
-    // Right after joining, Netlify Blobs' eventual consistency can briefly
-    // hide the new member, so retry "not a member" a few times before sending
-    // them to the join page.
+    // Right after creating or joining, the new carpool or member might not be
+    // readable yet if the server ever falls back to Netlify Blobs' eventual
+    // consistency (see src/store.js), so retry "not found" / "not a member" a
+    // few times before sending them to the join page.
     for (let attempt = 0; ; attempt++) {
       try {
         [carpool, scheduleData] = await Promise.all([fetchCarpool(), fetchSchedule()]);
         break;
       } catch (err) {
-        if (!err.notMember) throw err;
+        if (!err.notMember && !err.notFound) throw err;
         if (attempt >= MEMBER_RETRY_ATTEMPTS) {
           window.location.href = `/?code=${encodeURIComponent(code)}`;
           return;

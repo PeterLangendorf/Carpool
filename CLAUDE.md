@@ -55,14 +55,18 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   holding the whole `{ carpools: {...} }` document, read-modify-written on every call — no
   in-memory cache, no transactions/locking, so concurrent writes are last-write-wins). Owns
   carpool codes, members, children, activity dates/times, recurrence rules, and per-date child
-  exclusions. All functions are async. Blobs uses eventual consistency by default (a write in
-  one call isn't guaranteed visible to an immediately-following separate `load()`), so any
-  store function whose result needs to reflect data it just wrote returns the mutated carpool
-  object directly (e.g. `addChild`/`updateChild`/`removeChild`/`setChildExclusion` return
-  `{ ..., carpool }`, and `createCarpoolWithOwner` builds the carpool and its owner member in
-  one load/save round trip) rather than making the caller re-fetch with `getCarpool()`. Follow
-  that pattern for any new mutation — don't write-then-immediately-`getCarpool()` in the same
-  request.
+  exclusions. All functions are async. Reads are **strongly consistent** (`getDbStore`): with
+  Blobs' default eventual consistency, a write could take up to a minute to reach reads in
+  other invocations — a just-created carpool's dashboard said "Carpool not found", and a stale
+  read-modify-write could undo someone else's change. Strong reads need the "uncached edge
+  URL": native functions get it automatically, but the API runs in Lambda compatibility mode
+  where `connectLambda()` drops it, so `netlify/functions/api.js` also passes each event to
+  `store.useLambdaBlobsContext`, which reads `url_uncached` from it (falling back to eventual
+  reads if it's ever missing). Store functions whose result needs to reflect data they just
+  wrote still return the mutated carpool directly (e.g. `addChild`/`updateChild`/
+  `removeChild`/`setChildExclusion` return `{ ..., carpool }`, and `createCarpoolWithOwner`
+  builds the carpool and its owner in one load/save) rather than re-fetching with
+  `getCarpool()` — keep that pattern for new mutations.
 - `src/scheduler.js` — pure function `buildSchedule(members, dates, dateOverrides, activityTimes)`
   that assigns drivers. No I/O; safe to reason about/test in isolation.
 - `public/auth.js` — loaded by every page before its own script: fetches the Clerk

@@ -18,8 +18,52 @@ function getFileStore(file) {
   };
 }
 
+// Netlify Blobs is eventually consistent by default: a write can take up to a
+// minute to show up in reads from other function invocations. That made a
+// just-created carpool's dashboard say "Carpool not found", and since every
+// mutation reads, modifies and rewrites the whole document, a stale read could
+// also undo someone else's recent change. So reads here are strongly
+// consistent, which needs the Blobs "uncached edge URL".
+//
+// Native functions (monthly-email) get it in their Blobs context. The API
+// function runs in Lambda compatibility mode, where Netlify sends it in the
+// event (`url_uncached`) but connectLambda() drops it — so
+// netlify/functions/api.js passes each event here as well.
+let lambdaBlobs = null;
+
+function useLambdaBlobsContext(event) {
+  try {
+    const data = JSON.parse(Buffer.from(event.blobs, 'base64').toString('utf8'));
+    lambdaBlobs = {
+      siteID: event.headers['x-nf-site-id'],
+      token: data.token,
+      edgeURL: data.url,
+      uncachedEdgeURL: data.url_uncached,
+    };
+  } catch {
+    lambdaBlobs = null;
+  }
+}
+
+function nativeContextHasUncachedURL() {
+  try {
+    const raw = globalThis.netlifyBlobsContext || process.env.NETLIFY_BLOBS_CONTEXT;
+    return Boolean(raw && JSON.parse(Buffer.from(raw, 'base64').toString('utf8')).uncachedEdgeURL);
+  } catch {
+    return false;
+  }
+}
+
 function getDbStore() {
   if (process.env.LOCAL_DB_FILE) return getFileStore(process.env.LOCAL_DB_FILE);
+  if (lambdaBlobs) {
+    if (lambdaBlobs.uncachedEdgeURL && lambdaBlobs.siteID && lambdaBlobs.token) {
+      return getStore({ name: STORE_NAME, consistency: 'strong', ...lambdaBlobs });
+    }
+  } else if (nativeContextHasUncachedURL()) {
+    return getStore({ name: STORE_NAME, consistency: 'strong' });
+  }
+  // No uncached URL available: eventual consistency rather than failing every read.
   return getStore(STORE_NAME);
 }
 
@@ -612,6 +656,7 @@ async function setEmailSubscription(code, memberId, token, subscribed) {
 }
 
 module.exports = {
+  useLambdaBlobsContext,
   getCarpool,
   getAllCarpools,
   linkMembersByEmail,

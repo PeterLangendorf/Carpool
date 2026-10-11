@@ -13,11 +13,11 @@ function getEffectiveOwnerId(carpool) {
 // or needed for both legs" so old data keeps working.
 //
 // Likewise, members from before multiple addresses existed have a single
-// `address` string — expose it as a one-entry `addresses` list. Emails and
-// unsubscribe tokens are stripped: the carpool payload is readable by anyone
-// with the join code.
+// `address` string — expose it as a one-entry `addresses` list. Emails,
+// unsubscribe tokens and Clerk user IDs are stripped: every member of the
+// carpool can read the payload.
 function normalizeMembers(members) {
-  return members.map(({ email, unsubscribeToken, ...m }) => ({
+  return members.map(({ email, unsubscribeToken, userId, ...m }) => ({
     ...m,
     addresses: m.addresses || (m.address ? [{ id: 'a_legacy', address: m.address }] : []),
     rideAddresses: m.rideAddresses || { there: {}, back: {} },

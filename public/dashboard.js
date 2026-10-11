@@ -17,13 +17,9 @@ if (!code) {
   window.location.href = '/';
 }
 
-const identityRaw = sessionStorage.getItem(`carpool:${code}`);
-const identity = identityRaw ? JSON.parse(identityRaw) : null;
-
-if (!identity) {
-  window.location.href = `/?code=${encodeURIComponent(code)}&tab=members`;
-}
-
+// The signed-in user's member in this carpool ({ id, name }), from the
+// server's `me` once the carpool loads.
+let identity = null;
 let carpool = null;
 let scheduleData = null;
 
@@ -50,7 +46,7 @@ function flashCopiedFeedback(el, restoreText) {
 }
 
 async function api(path, options) {
-  const res = await fetch(path, options);
+  const res = await auth.fetch(path, options);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error((data.errors && data.errors.join(', ')) || 'Something went wrong');
@@ -429,7 +425,7 @@ async function saveChildChanges(dateKey, changes) {
       api(`/api/carpools/${encodeURIComponent(code)}/dates/${dateKey}/child-exclusion`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requesterId: identity.id, childId, excluded }),
+        body: JSON.stringify({ childId, excluded }),
       })
     )
   );
@@ -751,7 +747,7 @@ async function saveMyChild(childId, row, originalFirstName) {
   const errorEl = document.getElementById('myChildrenError');
   showError(errorEl, '');
 
-  const body = { requesterId: identity.id, needsRideThereDays: thereDays, needsRideBackDays: backDays };
+  const body = { needsRideThereDays: thereDays, needsRideBackDays: backDays };
   if (newFirstName && newFirstName !== originalFirstName) body.firstName = newFirstName;
 
   try {
@@ -776,7 +772,7 @@ async function removeMyChild(childId, name) {
     await api(`/api/carpools/${encodeURIComponent(code)}/members/${identity.id}/children/${childId}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requesterId: identity.id }),
+      body: JSON.stringify({}),
     });
     await refreshCarpoolAndSchedule();
     renderAll();
@@ -795,7 +791,7 @@ document.getElementById('addMyChildBtn').addEventListener('click', async () => {
     await api(`/api/carpools/${encodeURIComponent(code)}/members/${identity.id}/children`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requesterId: identity.id, firstName: firstName.trim(), needsRideThereDays: [], needsRideBackDays: [] }),
+      body: JSON.stringify({ firstName: firstName.trim(), needsRideThereDays: [], needsRideBackDays: [] }),
     });
     await refreshCarpoolAndSchedule();
     renderAll();
@@ -838,16 +834,24 @@ function renderAll() {
   renderMembers();
 }
 
-async function fetchCarpool() {
-  const res = await fetch(`/api/carpools/${encodeURIComponent(code)}`);
-  if (!res.ok) throw new Error('Carpool not found');
-  return res.json();
+// Throws with `notMember` set when the signed-in user isn't in this carpool.
+async function fetchCarpoolJson(path, fallbackMessage) {
+  const res = await auth.fetch(path);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error((data.errors && data.errors.join(', ')) || fallbackMessage);
+    err.notMember = Boolean(data.notMember);
+    throw err;
+  }
+  return data;
 }
 
-async function fetchSchedule() {
-  const res = await fetch(`/api/carpools/${encodeURIComponent(code)}/schedule`);
-  if (!res.ok) throw new Error('Could not load schedule');
-  return res.json();
+function fetchCarpool() {
+  return fetchCarpoolJson(`/api/carpools/${encodeURIComponent(code)}`, 'Carpool not found');
+}
+
+function fetchSchedule() {
+  return fetchCarpoolJson(`/api/carpools/${encodeURIComponent(code)}/schedule`, 'Could not load schedule');
 }
 
 function findMe() {
@@ -875,8 +879,7 @@ function showMemberNotFound() {
 }
 
 document.getElementById('rejoinBtn').addEventListener('click', () => {
-  sessionStorage.removeItem(`carpool:${code}`);
-  window.location.href = `/?code=${encodeURIComponent(code)}&tab=members`;
+  window.location.href = `/?code=${encodeURIComponent(code)}`;
 });
 
 // Member-only overlays need the member record; if it isn't loaded, try
@@ -891,9 +894,26 @@ async function withMe(open) {
 }
 
 async function loadAll() {
+  await auth.requireSignIn();
   const errorEl = document.getElementById('loadError');
   try {
-    [carpool, scheduleData] = await Promise.all([fetchCarpool(), fetchSchedule()]);
+    // Right after joining, Netlify Blobs' eventual consistency can briefly
+    // hide the new member, so retry "not a member" a few times before sending
+    // them to the join page.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        [carpool, scheduleData] = await Promise.all([fetchCarpool(), fetchSchedule()]);
+        break;
+      } catch (err) {
+        if (!err.notMember) throw err;
+        if (attempt >= MEMBER_RETRY_ATTEMPTS) {
+          window.location.href = `/?code=${encodeURIComponent(code)}`;
+          return;
+        }
+        await sleep(MEMBER_RETRY_DELAY_MS);
+      }
+    }
+    identity = carpool.me;
     renderAll();
     if (!findMe()) {
       if (await waitForMyMembership()) renderAll();
@@ -1087,7 +1107,7 @@ document.getElementById('saveDatesBtn').addEventListener('click', async () => {
     carpool = await api(`/api/carpools/${encodeURIComponent(code)}/activity-dates`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requesterId: identity.id, dates, times: editorActivityTimes }),
+      body: JSON.stringify({ dates, times: editorActivityTimes }),
     });
     scheduleData = await fetchSchedule();
     dismissDateEditor();
@@ -1233,7 +1253,7 @@ document.getElementById('saveMyAddressesBtn').addEventListener('click', async ()
     const data = await api(`/api/carpools/${encodeURIComponent(code)}/members/${identity.id}/addresses`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requesterId: identity.id, addresses, rideAddresses }),
+      body: JSON.stringify({ addresses, rideAddresses }),
     });
     carpool = data.carpool;
     dismissMyAddressesOverlay();
@@ -1293,7 +1313,7 @@ document.getElementById('sendEmailBtn').addEventListener('click', async () => {
     const { sent, skipped, failed, lastUpdateEmailAt } = await api(`/api/carpools/${encodeURIComponent(code)}/email-update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requesterId: identity.id, message: document.getElementById('emailMessage').value }),
+      body: JSON.stringify({ message: document.getElementById('emailMessage').value }),
     });
     const parts = [`Sent to ${sent} member${sent === 1 ? '' : 's'}.`];
     if (skipped) parts.push(`${skipped} skipped (no email on file or unsubscribed).`);
@@ -1317,7 +1337,7 @@ document.getElementById('monthlyEmailToggle').addEventListener('change', async (
     carpool = await api(`/api/carpools/${encodeURIComponent(code)}/details`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requesterId: identity.id, monthlyEmail: e.target.checked }),
+      body: JSON.stringify({ monthlyEmail: e.target.checked }),
     });
   } catch (err) {
     e.target.checked = !e.target.checked;
@@ -1358,7 +1378,7 @@ document.getElementById('saveDetailsBtn').addEventListener('click', async () => 
     carpool = await api(`/api/carpools/${encodeURIComponent(code)}/details`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requesterId: identity.id, name, activityName, activityLocation }),
+      body: JSON.stringify({ name, activityName, activityLocation }),
     });
     dismissDetailsOverlay();
     renderAll();
@@ -1395,9 +1415,8 @@ document.getElementById('confirmLeaveBtn').addEventListener('click', async () =>
     await api(`/api/carpools/${encodeURIComponent(code)}/members/${identity.id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requesterId: identity.id }),
+      body: JSON.stringify({}),
     });
-    sessionStorage.removeItem(`carpool:${code}`);
     window.location.href = '/';
   } catch (err) {
     showError(errorEl, err.message);

@@ -4,10 +4,26 @@
 
 [functions]
   node_bundler = "esbuild"
-  external_node_modules = ["express"]
+  external_node_modules = ["express", "@clerk/express"]
 
 [[redirects]]
   force = true
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"
+  status = 200
+
+# Clean URLs for the sign-in page, privacy policy and terms of service.
+[[redirects]]
+  from = "/sign-in"
+  to = "/sign-in.html"
+  status = 200
+
+[[redirects]]
+  from = "/privacy"
+  to = "/privacy.html"
+  status = 200
+
+[[redirects]]
+  from = "/tos"
+  to = "/tos.html"
   status = 200

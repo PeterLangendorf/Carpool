@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#eaf4fc" />
+<link rel="manifest" href="/manifest.json" />
+<link rel="icon" href="/img/app-icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/img/app-icon.svg" />
+<title>Sign in · Carpool</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<script src="/loader.js"></script>
+
+<div class="page">
+  <div class="site-header">
+    <a href="/"><img src="/img/carpooler-name.svg" alt="Carpooler" class="site-logo-lockup" /></a>
+  </div>
+
+  <div>
+    <h1 id="signInTitle">Sign in</h1>
+    <p class="subtitle" id="signInSubtitle">Carpools include addresses and riders' names, so only signed-in members can see them.</p>
+  </div>
+
+  <div class="card hidden" id="signInError">
+    <h2>Sign-in unavailable</h2>
+    <p class="subtitle" id="signInErrorText"></p>
+  </div>
+
+  <div class="sign-in-mount" id="signInMount"></div>
+
+  <p class="footer-links"><a href="/privacy">Privacy policy</a> · <a href="/tos">Terms of service</a></p>
+</div>
+
+<script src="/auth.js"></script>
+<script src="/sign-in.js"></script>
+</body>
+</html>

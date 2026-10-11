@@ -13,7 +13,9 @@ const api = require('./src/app');
 const PORT = Number(process.env.PORT) || 8888;
 const site = express();
 site.use(api);
-site.use(express.static(path.join(__dirname, 'public'), { maxAge: 0 }));
+// `extensions` serves /sign-in, /privacy and /tos from their .html files
+// (netlify.toml rewrites them too).
+site.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, extensions: ['html'] }));
 
 site.listen(PORT, '0.0.0.0', () => {
   console.log(`Carpool running locally (data in ${process.env.LOCAL_DB_FILE})`);

@@ -17,7 +17,11 @@ computes a fair driving schedule for each activity date.
 - `npm run local` — runs everything on this machine with no Netlify involvement (`local-server.js`):
   one Express server for `public/` + the API on port 8888, listening on all interfaces so
   phones on the same Wi-Fi can connect. Data goes in `local-db.json` (gitignored) instead of
-  Netlify Blobs, via the `LOCAL_DB_FILE` switch in `src/store.js`.
+  Netlify Blobs, via the `LOCAL_DB_FILE` switch in `src/store.js`. Reads env vars from `.env`
+  (gitignored) if present.
+- Sign-in needs `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` (from the Clerk dashboard) in
+  `.env` locally and in the Netlify site's environment variables. Without them every carpool
+  route answers 503 and the pages show "Sign-in unavailable".
 - No test suite and no lint config currently exist in this repo.
 
 ## Architecture
@@ -39,6 +43,10 @@ There is no long-running server process — see `netlify.toml` for the redirect 
 - `netlify/functions/monthly-email.mjs` — scheduled function (13:00 UTC on the 1st) that
   emails members of carpools with `monthlyEmail` on. Uses Netlify's native function format,
   so Blobs is configured automatically (no `connectLambda`).
+- `src/auth.js` — Clerk sign-in for the API: `requireUser` (401 without a valid session;
+  sets `req.userId`) and `requireMember` (403 unless that user is a member of `:code`; sets
+  `req.carpool`/`req.member`), plus linking members from before sign-in existed by verified
+  email.
 - `src/normalize.js` — read-side helpers shared by the API and the email jobs
   (`normalizeMembers`, `normalizeActivityTimes`, `getEffectiveOwnerId`, `getScheduleResult`).
 - `src/email.js` (builds/sends emails via Resend) and `src/notify.js` (emails a whole
@@ -57,8 +65,28 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   request.
 - `src/scheduler.js` — pure function `buildSchedule(members, dates, dateOverrides, activityTimes)`
   that assigns drivers. No I/O; safe to reason about/test in isolation.
+- `public/auth.js` — loaded by every page before its own script: fetches the Clerk
+  publishable key from `GET /api/config`, loads Clerk's browser scripts from the key's
+  Frontend API host, and `auth.fetch` attaches the session token as a Bearer header. Pages
+  never sign people in themselves: `auth.redirectToSignIn(returnTo, reason)` /
+  `auth.requireSignIn()` send them to the sign-in page, which comes back afterwards. Clerk
+  navigates after sign-in and sign-out (to `/`) — don't reload from an auth listener, which
+  can cut a sign-out short.
+- `public/sign-in.html` + `public/sign-in.js` — the sign-in page at `/sign-in` (a rewrite in
+  `netlify.toml`; `extensions: ['html']` in `local-server.js`). Takes `?redirect_url=`
+  (same-site paths only, to avoid an open redirect) and `?reason=create|join` for its wording.
+- `public/privacy.html` — the privacy policy at `/privacy`. It describes what data the app
+  collects, who sees it and which services handle it (Clerk, Google, Netlify, Resend, Apple
+  Maps links), so update it when any of that changes. `public/tos.html` is the terms of
+  service at `/tos`. Both are linked from the home and sign-in pages.
 - `public/index.html` + `public/app.js` — the member-facing flow: home → create/join a
   carpool → member form (name, address, seats, which days you can drive) → view schedule.
+  Nobody is asked to sign in until it's needed: when looking up a join code, or after the
+  create flow's "All set!" popup (before "Add yourself"). The carpool details entered so far
+  are saved to localStorage (`saveCreateDraft`) and restored on `/?resume=create`, since
+  signing in leaves the page. Signed-in people also get "Your carpools" (`GET
+  /api/my-carpools`). Joining by code calls `GET .../preview` (name + dates/times only);
+  people already in the carpool go straight to the dashboard.
 - `public/dashboard.html` + `public/dashboard.js` — the owner's carpool management view
   (edit activity dates/times/recurrence, manage members/children, per-date exclusions).
 
@@ -108,9 +136,14 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   Every email has an unsubscribe link (`/api/unsubscribe?c=&m=&t=`, plus RFC 8058
   one-click headers) authorized by a secret per-member `unsubscribeToken`; GET only shows a
   confirm button (link scanners prefetch), POST sets `member.emailOptOut`, which update and
-  monthly emails skip. Emails and tokens are stripped from every API response by
+  monthly emails skip. Emails, tokens and Clerk user IDs are stripped from every API response by
   `normalizeMembers`.
-- **Authorization is requester-ID based, not session-based**: mutating endpoints take a
-  `requesterId` in the body and compare it against the target member/owner ID — there's no
-  auth token or cookie session. `code` uniquely identifies a carpool; `store.normalizeCode`
+- **Authorization is Clerk-session based**: every carpool route runs `requireUser` (and
+  usually `requireMember`); the requester is `req.member`, worked out from the session —
+  never trust a member ID from the request body. Members are tied to Clerk users by
+  `member.userId` (set on create/join). Members from before sign-in existed have no
+  `userId` and are claimed the first time a user with a matching *verified* email (Clerk)
+  opens the carpool or their carpool list (`store.linkMembersByEmail`). Only members can read
+  a carpool (addresses, riders, schedule); the unsubscribe routes are the only unauthenticated
+  ones besides `/api/config`. `code` uniquely identifies a carpool; `store.normalizeCode`
   strips ambiguous characters (I/O/0/1 excluded from generated codes).

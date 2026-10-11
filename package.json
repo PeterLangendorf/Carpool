@@ -5,11 +5,12 @@
   "main": "netlify/functions/api.js",
   "scripts": {
     "start": "netlify dev",
-    "local": "node local-server.js"
+    "local": "node --env-file-if-exists=.env local-server.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "@clerk/express": "^2.1.78",
     "@netlify/blobs": "^11.1.0",
+    "express": "^4.19.2",
     "serverless-http": "^4.0.0"
   },
   "devDependencies": {

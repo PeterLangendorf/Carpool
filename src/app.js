@@ -3,6 +3,7 @@ const store = require('./store');
 const { sendCarpoolSummary, isEmailConfigured } = require('./email');
 const { sendUpdateEmail } = require('./notify');
 const { getEffectiveOwnerId, normalizeMembers, normalizeActivityTimes, getScheduleResult } = require('./normalize');
+const { requireUser, requireMember, getMembership, getUserCarpools } = require('./auth');
 
 const app = express();
 app.use(express.json());
@@ -93,8 +94,11 @@ function validateMemberInput(body) {
   };
 }
 
-function serializeCarpool(carpool) {
+// `me` is the signed-in requester's member, so the page knows which one is
+// them.
+function serializeCarpool(carpool, me) {
   return {
+    me: me ? { id: me.id, name: me.name } : null,
     code: carpool.code,
     name: carpool.name,
     activityName: carpool.activityName || '',
@@ -110,12 +114,38 @@ function serializeCarpool(carpool) {
   };
 }
 
+function isOwner(req) {
+  return req.member.id === getEffectiveOwnerId(req.carpool);
+}
+
 function siteUrl(req) {
   if (process.env.URL) return process.env.URL.replace(/\/$/, '');
   return `${req.get('x-forwarded-proto') || req.protocol}://${req.get('x-forwarded-host') || req.get('host')}`;
 }
 
-app.post('/api/carpools', async (req, res) => {
+// Public: the Clerk publishable key the pages need to load sign-in.
+app.get('/api/config', (req, res) => {
+  res.json({ clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY || null });
+});
+
+// The signed-in user's carpools, for the home screen.
+app.get('/api/my-carpools', requireUser, async (req, res) => {
+  try {
+    const list = await getUserCarpools(req.userId);
+    res.json({
+      carpools: list.map(({ carpool, member }) => ({
+        code: carpool.code,
+        name: carpool.name,
+        activityName: carpool.activityName || '',
+        isOwner: member.id === getEffectiveOwnerId(carpool),
+      })),
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
+});
+
+app.post('/api/carpools', requireUser, async (req, res) => {
   const { dates, times, recurrence } = req.body;
   const carpoolName = String(req.body.carpoolName || '').trim();
   const activityName = String(req.body.activityName || '').trim();
@@ -130,35 +160,52 @@ app.post('/api/carpools', async (req, res) => {
   try {
     const { carpool, member } = await store.createCarpoolWithOwner(
       { name: carpoolName, activityName, activityLocation },
-      memberInput,
+      { ...memberInput, userId: req.userId },
       dates !== undefined ? { dates, times: times || {}, recurrence } : null
     );
     const emailSent = await sendCarpoolSummary(member.email, carpool, member, siteUrl(req), {
       schedule: getScheduleResult(carpool).schedule,
       members: normalizeMembers(carpool.members),
     });
-    res.status(201).json({ carpool: serializeCarpool(carpool), member: normalizeMembers([member])[0], emailSent });
+    res.status(201).json({ carpool: serializeCarpool(carpool, member), member: normalizeMembers([member])[0], emailSent });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.get('/api/carpools/:code', async (req, res) => {
+app.get('/api/carpools/:code', requireUser, requireMember, (req, res) => {
+  res.json(serializeCarpool(req.carpool, req.member));
+});
+
+// For joining by code: what a signed-in non-member needs to fill in the join
+// form (the carpool's name, activity and dates/times) and nothing about its
+// members. `isMember` sends people already in it straight to the dashboard.
+app.get('/api/carpools/:code/preview', requireUser, async (req, res) => {
   try {
-    const carpool = await store.getCarpool(req.params.code);
-    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
-    res.json(serializeCarpool(carpool));
+    const { carpool, member } = await getMembership(req, req.params.code);
+    res.json({
+      code: carpool.code,
+      name: carpool.name,
+      activityName: carpool.activityName || '',
+      activityLocation: carpool.activityLocation || '',
+      activityDates: carpool.activityDates || [],
+      activityTimes: normalizeActivityTimes(carpool.activityTimes),
+      isMember: Boolean(member),
+    });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.post('/api/carpools/:code/members', async (req, res) => {
+app.post('/api/carpools/:code/members', requireUser, async (req, res) => {
   const { errors, member: memberInput } = validateMemberInput(req.body);
   if (errors.length) return res.status(400).json({ errors });
 
   try {
-    const { member, carpool } = await store.addMember(req.params.code, memberInput);
+    // Also claims an older member of theirs by email, so they aren't added twice.
+    const existing = await getMembership(req, req.params.code);
+    if (existing.member) return res.status(409).json({ errors: ["You're already in this carpool"] });
+    const { member, carpool } = await store.addMember(req.params.code, { ...memberInput, userId: req.userId });
     const emailSent = await sendCarpoolSummary(member.email, carpool, member, siteUrl(req), {
       schedule: getScheduleResult(carpool).schedule,
       members: normalizeMembers(carpool.members),
@@ -169,44 +216,40 @@ app.post('/api/carpools/:code/members', async (req, res) => {
   }
 });
 
-app.delete('/api/carpools/:code/members/:memberId', async (req, res) => {
+app.delete('/api/carpools/:code/members/:memberId', requireUser, requireMember, async (req, res) => {
   try {
-    const carpool = await store.getCarpool(req.params.code);
-    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
-
-    const { requesterId } = req.body;
-    if (requesterId !== req.params.memberId) {
+    if (req.member.id !== req.params.memberId) {
       return res.status(403).json({ errors: ['You can only remove yourself'] });
     }
 
     const updated = await store.removeMember(req.params.code, req.params.memberId);
     if (!updated) return res.json({ deleted: true });
-    res.json(serializeCarpool(updated));
+    res.json(serializeCarpool(updated, null));
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.post('/api/carpools/:code/members/:memberId/children', async (req, res) => {
-  const { requesterId, firstName, lastNameOverride, needsRideThereDays, needsRideBackDays } = req.body;
+app.post('/api/carpools/:code/members/:memberId/children', requireUser, requireMember, async (req, res) => {
+  const { firstName, lastNameOverride, needsRideThereDays, needsRideBackDays } = req.body;
   const first = String(firstName || '').trim();
   if (!first) return res.status(400).json({ errors: ['First name is required'] });
 
   try {
-    const { child, carpool } = await store.addChild(req.params.code, req.params.memberId, requesterId, {
+    const { child, carpool } = await store.addChild(req.params.code, req.params.memberId, req.member.id, {
       firstName: first,
       lastNameOverride: lastNameOverride ? String(lastNameOverride).trim() : '',
       needsRideThereDays: parseDays(needsRideThereDays),
       needsRideBackDays: parseDays(needsRideBackDays),
     });
-    res.status(201).json({ child, carpool: serializeCarpool(carpool) });
+    res.status(201).json({ child, carpool: serializeCarpool(carpool, req.member) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.patch('/api/carpools/:code/members/:memberId/children/:childId', async (req, res) => {
-  const { requesterId, firstName, lastNameOverride, needsRideThereDays, needsRideBackDays } = req.body;
+app.patch('/api/carpools/:code/members/:memberId/children/:childId', requireUser, requireMember, async (req, res) => {
+  const { firstName, lastNameOverride, needsRideThereDays, needsRideBackDays } = req.body;
 
   try {
     const updates = {};
@@ -215,19 +258,17 @@ app.patch('/api/carpools/:code/members/:memberId/children/:childId', async (req,
     if (needsRideThereDays !== undefined) updates.needsRideThereDays = parseDays(needsRideThereDays);
     if (needsRideBackDays !== undefined) updates.needsRideBackDays = parseDays(needsRideBackDays);
 
-    const { carpool } = await store.updateChild(req.params.code, req.params.memberId, requesterId, req.params.childId, updates);
-    res.json({ carpool: serializeCarpool(carpool), schedule: getScheduleResult(carpool) });
+    const { carpool } = await store.updateChild(req.params.code, req.params.memberId, req.member.id, req.params.childId, updates);
+    res.json({ carpool: serializeCarpool(carpool, req.member), schedule: getScheduleResult(carpool) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.delete('/api/carpools/:code/members/:memberId/children/:childId', async (req, res) => {
-  const { requesterId } = req.body;
-
+app.delete('/api/carpools/:code/members/:memberId/children/:childId', requireUser, requireMember, async (req, res) => {
   try {
-    const { carpool } = await store.removeChild(req.params.code, req.params.memberId, requesterId, req.params.childId);
-    res.json({ carpool: serializeCarpool(carpool), schedule: getScheduleResult(carpool) });
+    const { carpool } = await store.removeChild(req.params.code, req.params.memberId, req.member.id, req.params.childId);
+    res.json({ carpool: serializeCarpool(carpool, req.member), schedule: getScheduleResult(carpool) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
@@ -271,53 +312,43 @@ function activityDatesErrors(dates, times, recurrence) {
   return errors;
 }
 
-app.put('/api/carpools/:code/activity-dates', async (req, res) => {
+app.put('/api/carpools/:code/activity-dates', requireUser, requireMember, async (req, res) => {
   try {
-    const carpool = await store.getCarpool(req.params.code);
-    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
-
-    const { requesterId, dates, times, recurrence } = req.body;
-    if (requesterId !== getEffectiveOwnerId(carpool)) {
+    const { dates, times, recurrence } = req.body;
+    if (!isOwner(req)) {
       return res.status(403).json({ errors: ['Only the owner can edit activity dates'] });
     }
     const errors = activityDatesErrors(dates, times, recurrence);
     if (errors.length) return res.status(400).json({ errors });
 
     const updated = await store.setActivityDates(req.params.code, dates, times || {}, recurrence);
-    res.json(serializeCarpool(updated));
+    res.json(serializeCarpool(updated, req.member));
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.put('/api/carpools/:code/dates/:date/child-exclusion', async (req, res) => {
+app.put('/api/carpools/:code/dates/:date/child-exclusion', requireUser, requireMember, async (req, res) => {
   try {
-    const carpool = await store.getCarpool(req.params.code);
-    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
-
     const { date } = req.params;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ errors: ['Invalid date'] });
     }
-    const { requesterId, childId, excluded } = req.body;
+    const { childId, excluded } = req.body;
     if (typeof childId !== 'string' || typeof excluded !== 'boolean') {
       return res.status(400).json({ errors: ['childId and excluded are required'] });
     }
 
-    const updated = await store.setChildExclusion(req.params.code, date, requesterId, childId, excluded);
+    const updated = await store.setChildExclusion(req.params.code, date, req.member.id, childId, excluded);
     res.json(getScheduleResult(updated));
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-app.patch('/api/carpools/:code/details', async (req, res) => {
+app.patch('/api/carpools/:code/details', requireUser, requireMember, async (req, res) => {
   try {
-    const carpool = await store.getCarpool(req.params.code);
-    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
-
-    const { requesterId } = req.body;
-    if (requesterId !== getEffectiveOwnerId(carpool)) {
+    if (!isOwner(req)) {
       return res.status(403).json({ errors: ['Only the owner can edit carpool details'] });
     }
 
@@ -336,15 +367,15 @@ app.patch('/api/carpools/:code/details', async (req, res) => {
     if (errors.length) return res.status(400).json({ errors });
 
     const updated = await store.updateCarpoolDetails(req.params.code, details);
-    res.json(serializeCarpool(updated));
+    res.json(serializeCarpool(updated, req.member));
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
 });
 
-// Body: { requesterId, addresses: [{ id?, address }], rideAddresses } where
-// rideAddresses indexes into `addresses`, as on create/join.
-app.put('/api/carpools/:code/members/:memberId/addresses', async (req, res) => {
+// Body: { addresses: [{ id?, address }], rideAddresses } where rideAddresses
+// indexes into `addresses`, as on create/join.
+app.put('/api/carpools/:code/members/:memberId/addresses', requireUser, requireMember, async (req, res) => {
   const raw = Array.isArray(req.body.addresses) ? req.body.addresses : [];
   const addresses = raw
     .map((a) => ({ id: a && typeof a.id === 'string' ? a.id : null, address: String((a && a.address) || '').trim() }))
@@ -359,11 +390,11 @@ app.put('/api/carpools/:code/members/:memberId/addresses', async (req, res) => {
     const { carpool } = await store.setMemberAddresses(
       req.params.code,
       req.params.memberId,
-      req.body.requesterId,
+      req.member.id,
       addresses,
       rideAddresses
     );
-    res.json({ carpool: serializeCarpool(carpool) });
+    res.json({ carpool: serializeCarpool(carpool, req.member) });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
@@ -374,11 +405,9 @@ const MAX_UPDATE_MESSAGE = 2000;
 // Owner only, at most once per 24 hours: emails every subscribed member
 // their summary + schedule for the rest of the month, with an optional note
 // from the owner.
-app.post('/api/carpools/:code/email-update', async (req, res) => {
+app.post('/api/carpools/:code/email-update', requireUser, requireMember, async (req, res) => {
   try {
-    const carpool = await store.getCarpool(req.params.code);
-    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
-    if (req.body.requesterId !== getEffectiveOwnerId(carpool)) {
+    if (!isOwner(req)) {
       return res.status(403).json({ errors: ['Only the owner can email the carpool'] });
     }
     if (!isEmailConfigured()) {
@@ -453,14 +482,8 @@ app.post('/api/unsubscribe', async (req, res) => {
   }
 });
 
-app.get('/api/carpools/:code/schedule', async (req, res) => {
-  try {
-    const carpool = await store.getCarpool(req.params.code);
-    if (!carpool) return res.status(404).json({ errors: ['Carpool not found'] });
-    res.json(getScheduleResult(carpool));
-  } catch (err) {
-    res.status(err.status || 500).json({ errors: [err.message] });
-  }
+app.get('/api/carpools/:code/schedule', requireUser, requireMember, (req, res) => {
+  res.json(getScheduleResult(req.carpool));
 });
 
 module.exports = app;

@@ -415,7 +415,36 @@ footer.actions {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  margin-top: 12px;
+}
+
+/* Home screen: intro, how it works, then the create/join buttons. */
+.screen.home {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.home-intro h1 {
+  margin: 0 0 8px;
+}
+
+.home-lead {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.home-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  line-height: 1.45;
+}
+
+.screen.home .card a {
+  color: var(--accent);
 }
 
 .big-btn {
@@ -908,6 +937,38 @@ footer.actions {
 }
 
 .site-header {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  /* Room on both sides for the account button, so it never covers the logo. */
+  padding: 0 40px;
+}
+
+/* Clerk's account menu (sign out etc.), top right of the home page header. */
+.user-button {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+/* Shown instead of the account button while signed out (index.html). */
+.sign-in-link {
+  display: inline-block;
+  padding: 6px 0;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.95rem;
+  text-decoration: none;
+}
+
+/* The sign-in page (sign-in.html): Clerk's sign-in box, centered. */
+.site-header > a {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.sign-in-mount {
   display: flex;
   justify-content: center;
 }
@@ -1095,4 +1156,45 @@ textarea {
   .car-wheel {
     animation: none;
   }
+}
+
+/* Privacy policy page (privacy.html). */
+.policy {
+  line-height: 1.55;
+}
+
+.policy h2 {
+  margin: 10px 0 0;
+}
+
+.policy p,
+.policy ul {
+  margin: 0;
+}
+
+.policy ul {
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.policy a,
+.footer-links a,
+.ghost-link {
+  color: var(--accent);
+}
+
+/* Small links under a page's content (home, sign-in). */
+.footer-links {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.ghost-link {
+  text-align: center;
+  font-weight: 600;
+  text-decoration: none;
 }

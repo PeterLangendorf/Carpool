@@ -238,42 +238,40 @@ function showError(el, message) {
   el.classList.toggle('hidden', !message);
 }
 
-function saveIdentity(code, member) {
-  sessionStorage.setItem(
-    `carpool:${code}`,
-    JSON.stringify({ id: member.id, name: member.name })
-  );
-}
-
-const HISTORY_KEY = 'carpool:history';
-
-function getHistory() {
+// The signed-in user's carpools (from the server, so they follow the user
+// across devices).
+async function renderMyCarpools() {
+  const card = document.getElementById('myCarpoolsCard');
+  const list = document.getElementById('myCarpoolsList');
   try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+    const { carpools } = await api('/api/my-carpools');
+    card.classList.toggle('hidden', carpools.length === 0);
+    list.innerHTML = '';
+    carpools.forEach((c) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'member-btn';
+      btn.innerHTML = `<span class="code-badge" style="margin-right:10px;">${escapeHtml(c.code)}</span>${escapeHtml(c.name)}`;
+      btn.addEventListener('click', () => goToDashboard(c.code));
+      list.appendChild(btn);
+    });
   } catch {
-    return [];
+    card.classList.add('hidden');
   }
 }
 
-function rememberCarpool(code, carpoolName) {
-  const history = getHistory().filter((h) => h.code !== code);
-  history.unshift({ code, name: carpoolName });
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 8)));
-}
-
-function renderHistory() {
-  const card = document.getElementById('recentCarpoolsCard');
-  const list = document.getElementById('recentCarpoolsList');
-  const history = getHistory();
-  card.classList.toggle('hidden', history.length === 0);
-  list.innerHTML = '';
-  history.forEach((h) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'member-btn';
-    btn.innerHTML = `<span class="code-badge" style="margin-right:10px;">${h.code}</span>${h.name}`;
-    btn.addEventListener('click', () => goToDashboard(h.code));
-    list.appendChild(btn);
+// Fills the "your name" screens from the Clerk account; still editable.
+function prefillFromAccount(user) {
+  const email = user.primaryEmailAddress ? user.primaryEmailAddress.emailAddress : '';
+  [
+    ['createFirstName', 'joinNewFirstName', user.firstName],
+    ['createLastName', 'joinNewLastName', user.lastName],
+    ['createEmail', 'joinNewEmail', email],
+  ].forEach(([createId, joinId, value]) => {
+    [createId, joinId].forEach((id) => {
+      const input = document.getElementById(id);
+      if (value && !input.value) input.value = value;
+    });
   });
 }
 
@@ -300,7 +298,7 @@ function flashCopiedFeedback(el, restoreText) {
 }
 
 async function api(path, options) {
-  const res = await fetch(path, options);
+  const res = await auth.fetch(path, options);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error((data.errors && data.errors.join(', ')) || 'Something went wrong');
@@ -310,7 +308,6 @@ async function api(path, options) {
 }
 
 document.querySelectorAll('[data-daypicker]').forEach(renderDayPicker);
-renderHistory();
 
 // ---- Screen navigation ----
 const screens = document.querySelectorAll('.screen');
@@ -321,24 +318,28 @@ function showScreen(name) {
 }
 
 // ---- Create/join step progress ----
-// Each step lists the screens that count as it (branches like recurring vs.
-// specific dates share a step). Skipped steps (e.g. addresses when there are no
-// riders) just make the car jump ahead. `doneScreen` shows the bar full.
+// Each step lists the screens that count as it, so the car only moves when the
+// step changes. Skipped steps (e.g. addresses when there are no riders) just
+// make the car jump ahead. `doneScreen` shows the bar full. Creating a carpool
+// is two bars: the carpool itself (full on the review screen), then a fresh
+// bar for adding the organizer after the "All set!" popup.
 const FLOWS = {
   create: {
     title: 'Create a carpool',
     steps: [
-      ['create-name'],
+      ['create-name', 'create-activity'],
+      ['create-datetype', 'create-dates-recurring', 'create-dates-specific'],
+      ['create-timesmode', 'create-times-uniform', 'create-times-perweekday', 'create-times-perdate'],
+    ],
+    doneScreen: 'create-confirm',
+  },
+  createOwner: {
+    title: 'Add yourself',
+    steps: [
       ['create-yourname'],
       ['create-seats'],
       ['create-children'],
       ['create-address'],
-      ['create-activity'],
-      ['create-datetype'],
-      ['create-dates-recurring', 'create-dates-specific'],
-      ['create-timesmode'],
-      ['create-times-uniform', 'create-times-perweekday', 'create-times-perdate'],
-      ['create-confirm'],
       ['create-needsride'],
       ['create-candrive'],
     ],
@@ -348,7 +349,6 @@ const FLOWS = {
     title: 'Join a carpool',
     steps: [
       ['join-code'],
-      ['join-members'],
       ['join-new-name'],
       ['join-new-seats'],
       ['join-new-children'],
@@ -364,6 +364,7 @@ const flowRoadEl = document.getElementById('flowProgressRoad');
 flowRoadEl.insertAdjacentHTML('beforeend', CAR_SVG);
 let flowProgressValue = 0;
 let flowMovingTimer = null;
+let currentFlow = null;
 
 function updateFlowProgress(screenName) {
   let flow = null;
@@ -377,6 +378,7 @@ function updateFlowProgress(screenName) {
   });
   if (!flow) {
     flowProgressEl.classList.add('hidden');
+    currentFlow = null;
     return;
   }
 
@@ -386,13 +388,16 @@ function updateFlowProgress(screenName) {
   // the bar only fills once the flow is actually finished.
   const progress = done ? 1 : (stepIndex + 1) / (total + 1);
   document.getElementById('flowProgressTitle').textContent = flow.title;
+  // Not shown on screen; read out by screen readers as the bar's value.
   const stepText = done ? 'Done!' : `Step ${stepIndex + 1} of ${total}`;
-  document.getElementById('flowProgressStep').textContent = stepText;
   flowRoadEl.setAttribute('aria-label', `${flow.title} progress`);
   flowRoadEl.setAttribute('aria-valuenow', String(Math.round(progress * 100)));
   flowRoadEl.setAttribute('aria-valuetext', stepText);
 
-  // Coming in from outside the flow, drive in from the start of the road.
+  // Coming in from outside the flow (or from the other bar), drive in from the
+  // start of the road. Hiding first means the jump back to 0 isn't animated.
+  if (flow !== currentFlow) flowProgressEl.classList.add('hidden');
+  currentFlow = flow;
   if (flowProgressEl.classList.contains('hidden')) {
     flowProgressValue = 0;
     flowRoadEl.style.setProperty('--progress', '0');
@@ -418,7 +423,6 @@ document.getElementById('goJoinBtn').addEventListener('click', () => showScreen(
 
 // ---- Join flow: step 1 (code) ----
 let joinedCode = null;
-let joinedCarpoolName = null;
 let joinedActivityDates = [];
 let joinedActivityTimes = { uniform: {}, perWeekday: {}, perDate: {} };
 let joinedActiveWeekdays = [];
@@ -428,56 +432,46 @@ function joinedTimeResolver(weekday) {
   return resolveTimes(joinedActivityTimes, date, weekday);
 }
 
-async function loadMembersScreen(rawCode) {
+// Members already in the carpool go straight to its dashboard; everyone else
+// gets the join form. The preview has the carpool's dates/times (for the
+// ride/drive day pickers) but nothing about its members.
+async function lookUpCarpool(rawCode) {
   const errorEl = document.getElementById('joinCodeError');
+  const submitBtn = document.getElementById('joinCodeSubmit');
   showError(errorEl, '');
+  submitBtn.disabled = true;
 
   try {
-    const carpool = await api(`/api/carpools/${encodeURIComponent(rawCode)}`);
+    const carpool = await api(`/api/carpools/${encodeURIComponent(rawCode)}/preview`);
+    if (carpool.isMember) return goToDashboard(carpool.code);
     joinedCode = carpool.code;
-    joinedCarpoolName = carpool.name;
     joinedActivityDates = carpool.activityDates || [];
     joinedActivityTimes = carpool.activityTimes || { uniform: {}, perWeekday: {}, perDate: {} };
     const weekdaySet = new Set(joinedActivityDates.map((d) => new Date(d + 'T00:00:00').getDay()));
     joinedActiveWeekdays = DAY_ORDER.filter((d) => weekdaySet.has(d));
     if (joinedActiveWeekdays.length === 0) joinedActiveWeekdays = DAY_ORDER.slice();
 
-    document.getElementById('joinCarpoolTitle').textContent = carpool.name;
-    const list = document.getElementById('joinMemberList');
-    list.innerHTML = '';
-    if (carpool.members.length === 0) {
-      const p = document.createElement('p');
-      p.className = 'subtitle';
-      p.textContent = 'No members yet — be the first to join!';
-      list.appendChild(p);
-    }
-    carpool.members.forEach((member) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'member-btn';
-      btn.textContent = member.name;
-      btn.addEventListener('click', () => {
-        saveIdentity(joinedCode, member);
-        rememberCarpool(joinedCode, joinedCarpoolName);
-        goToDashboard(joinedCode);
-      });
-      list.appendChild(btn);
-    });
-    showScreen('join-members');
+    document.getElementById('joiningCarpoolName').textContent = `Joining ${carpool.name}`;
+    showScreen('join-new-name');
   } catch (err) {
     showScreen('join-code');
     if (rawCode) document.getElementById('joinCode').value = rawCode.toUpperCase();
     showError(errorEl, err.message);
+  } finally {
+    submitBtn.disabled = false;
   }
 }
 
-document.getElementById('joinCodeForm').addEventListener('submit', (e) => {
+// Joining is where an account is needed: signed-out people sign in first and
+// come back here with the code, which is then looked up automatically.
+document.getElementById('joinCodeForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const code = document.getElementById('joinCode').value.trim();
-  loadMembersScreen(code);
+  if (!(await auth.currentUser())) return auth.redirectToSignIn(`/?code=${encodeURIComponent(code)}`, 'join');
+  lookUpCarpool(code);
 });
 
-// ---- Join flow: step 3+, a multi-screen wizard (mirrors the create wizard) ----
+// ---- Join flow: step 2+, a multi-screen wizard (mirrors the create wizard) ----
 const joinWizard = {
   firstName: '',
   lastName: '',
@@ -491,10 +485,6 @@ const joinWizard = {
   canDriveThereDays: [],
   canDriveBackDays: [],
 };
-
-document.getElementById('joinAsNewBtn').addEventListener('click', () => {
-  showScreen('join-new-name');
-});
 
 document.querySelector('[data-step-form="join-new-name"]').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -625,8 +615,6 @@ document.querySelector('[data-step-form="join-new-candrive"]').addEventListener(
         children,
       }),
     });
-    saveIdentity(joinedCode, data.member);
-    rememberCarpool(joinedCode, joinedCarpoolName);
     goToDashboard(joinedCode);
   } catch (err) {
     submitBtn.disabled = false;
@@ -696,7 +684,7 @@ document.querySelector('[data-step-form="create-name"]').addEventListener('submi
   if (!carpoolName) return showError(errorEl, 'Please name your carpool');
   showError(errorEl, '');
   wizard.carpoolName = carpoolName;
-  showScreen('create-yourname');
+  showScreen('create-activity');
 });
 
 document.querySelector('[data-step-form="create-yourname"]').addEventListener('submit', (e) => {
@@ -727,7 +715,7 @@ document.querySelector('[data-step-form="create-seats"]').addEventListener('subm
 });
 
 // Addresses are only for picking up/dropping off riders, so an organizer
-// who's only driving skips straight to the activity details.
+// who's only driving skips straight to their driving days.
 document.querySelector('[data-step-form="create-children"]').addEventListener('submit', (e) => {
   e.preventDefault();
   wizard.children = getChildEntries(document.querySelector('[data-childlist="create"]'));
@@ -735,7 +723,7 @@ document.querySelector('[data-step-form="create-children"]').addEventListener('s
     showScreen('create-address');
   } else {
     wizard.addresses = [];
-    showScreen('create-activity');
+    goToDaysStep();
   }
 });
 
@@ -746,7 +734,7 @@ document.querySelector('[data-step-form="create-address"]').addEventListener('su
   if (!addresses.length) return showError(errorEl, 'Please enter at least one address');
   showError(errorEl, '');
   wizard.addresses = addresses;
-  showScreen('create-activity');
+  goToDaysStep();
 });
 
 document.querySelector('[data-step-form="create-activity"]').addEventListener('submit', (e) => {
@@ -763,7 +751,7 @@ document.querySelector('[data-step-form="create-activity"]').addEventListener('s
 });
 
 document.getElementById('backFromActivity').addEventListener('click', () => {
-  showScreen(wizard.children.length > 0 ? 'create-address' : 'create-children');
+  showScreen('create-name');
 });
 
 // ---- Create flow: activity date type ----
@@ -1050,15 +1038,6 @@ function renderWizardSummary() {
   const container = document.getElementById('createSummaryContent');
   const parts = [];
   parts.push(`<h2>${escapeHtml(wizard.carpoolName)}</h2>`);
-  parts.push(
-    `<div class="riders"><strong>You:</strong> ${escapeHtml(`${wizard.firstName} ${wizard.lastName}`)} · ${escapeHtml(wizard.email)} · drives up to ${wizard.seats} passengers</div>`
-  );
-  if (wizard.children.length) {
-    parts.push(`<div class="riders"><strong>Riders:</strong> ${wizard.children.map((c) => escapeHtml(c.firstName)).join(', ')}</div>`);
-  }
-  if (wizard.addresses.length) {
-    parts.push(`<div class="riders"><strong>Address${wizard.addresses.length === 1 ? '' : 'es'}:</strong> ${wizard.addresses.map(escapeHtml).join('; ')}</div>`);
-  }
   parts.push(`<div class="riders"><strong>Activity:</strong> ${escapeHtml(wizard.activityName)} · ${escapeHtml(wizard.activityLocation)}</div>`);
 
   let scheduleText;
@@ -1111,9 +1090,75 @@ document.getElementById('confirmBackBtn').addEventListener('click', () => {
   showScreen(wizard.lastTimesScreen);
 });
 
+// After the popup, the organizer adds themselves, which needs an account.
+// Signing in leaves this page, so the carpool details are saved first and
+// restored when the sign-in page sends them back (?resume=create).
 document.getElementById('confirmContinueBtn').addEventListener('click', () => {
-  showCompletePopupThen(() => goToDaysStep());
+  showCompletePopupThen(async () => {
+    if (await auth.currentUser()) return showScreen('create-yourname');
+    saveCreateDraft();
+    auth.redirectToSignIn('/?resume=create', 'create');
+  });
 });
+
+// localStorage rather than sessionStorage so it survives sign-in methods
+// that come back in a different tab. Holds only the carpool details (the
+// organizer's own info is asked for after signing in).
+const CREATE_DRAFT_KEY = 'carpool:createDraft';
+const CREATE_DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function saveCreateDraft() {
+  try {
+    localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ savedAt: Date.now(), wizard }));
+  } catch {
+    // Storage unavailable (e.g. private mode): they'd re-enter the details.
+  }
+}
+
+function clearCreateDraft() {
+  try {
+    localStorage.removeItem(CREATE_DRAFT_KEY);
+  } catch {}
+}
+
+// Puts a saved draft back into `wizard` and the create screens' inputs (so
+// Back from the review screen shows what they entered). False if there's none.
+function restoreCreateDraft() {
+  let draft = null;
+  try {
+    draft = JSON.parse(localStorage.getItem(CREATE_DRAFT_KEY));
+  } catch {}
+  if (!draft || !draft.wizard || Date.now() - draft.savedAt > CREATE_DRAFT_MAX_AGE_MS) return false;
+  Object.assign(wizard, draft.wizard);
+
+  document.getElementById('createCarpoolName').value = wizard.carpoolName;
+  document.getElementById('createActivityName').value = wizard.activityName;
+  document.getElementById('createActivityLocation').value = wizard.activityLocation;
+  if (wizard.dateMode === 'recurring' && wizard.recurrence) {
+    document.querySelectorAll('[data-daypicker="createRecurringWeekdays"] input').forEach((input) => {
+      input.checked = wizard.recurrence.weekdays.includes(Number(input.value));
+    });
+    document.getElementById('createRecurringStart').value = wizard.recurrence.startDate;
+    const endless = !wizard.recurrence.endDate;
+    document.getElementById('createRecurringEndless').checked = endless;
+    document.getElementById('createRecurringEnd').disabled = endless;
+    document.getElementById('createRecurringEnd').value = wizard.recurrence.endDate || '';
+  } else if (wizard.dateMode === 'specific') {
+    specificSelectedDates = new Set(wizard.activityDates);
+    const first = wizard.activityDates[0] ? new Date(wizard.activityDates[0] + 'T00:00:00') : new Date();
+    specificViewDate = new Date(first.getFullYear(), first.getMonth(), 1);
+  }
+  if (wizard.timesMode === 'uniform') {
+    document.getElementById('createUniformThere').value = wizard.activityTimes.uniform.there || '';
+    document.getElementById('createUniformBack').value = wizard.activityTimes.uniform.back || '';
+  } else if (wizard.dateMode === 'recurring') {
+    renderPerWeekdayTimesForm();
+  } else {
+    renderPerDateTimesList();
+  }
+  renderWizardSummary();
+  return true;
+}
 
 // ---- Create flow: ride/driving days (constrained to active weekdays) ----
 
@@ -1136,11 +1181,11 @@ document.querySelector('[data-step-form="create-needsride"]').addEventListener('
 });
 
 document.getElementById('backFromNeedsRide').addEventListener('click', () => {
-  showScreen('create-confirm');
+  showScreen('create-address');
 });
 
 document.getElementById('backFromCanDrive').addEventListener('click', () => {
-  showScreen(wizard.children.length > 0 ? 'create-needsride' : 'create-confirm');
+  showScreen(wizard.children.length > 0 ? 'create-needsride' : 'create-children');
 });
 
 document.querySelector('[data-step-form="create-candrive"]').addEventListener('submit', async (e) => {
@@ -1184,9 +1229,8 @@ document.querySelector('[data-step-form="create-candrive"]').addEventListener('s
       }),
     });
     createdCode = data.carpool.code;
-    saveIdentity(createdCode, data.member);
+    clearCreateDraft();
 
-    rememberCarpool(createdCode, data.carpool.name);
     document.getElementById('createdCode').textContent = createdCode;
     const emailNote = document.getElementById('createEmailSentNote');
     emailNote.textContent = `We've emailed a summary to ${wizard.email}.`;
@@ -1207,18 +1251,39 @@ document.getElementById('continueToDashboardBtn').addEventListener('click', () =
   goToDashboard(createdCode);
 });
 
-// ---- Deep-link support (e.g. a missing/cleared identity, or a recent-carpool tap) ----
+// ---- Startup ----
+// Deep links: ?code= (a join link or email; looked up once signed in) and
+// ?resume=create (back from signing in partway through creating a carpool).
+// Nobody is asked to sign in just for opening the page.
 const initialParams = new URLSearchParams(window.location.search);
 const initialCode = initialParams.get('code');
 const initialTab = initialParams.get('tab');
+const resumingCreate = initialParams.get('resume') === 'create' && restoreCreateDraft();
+if (initialParams.get('resume')) history.replaceState(null, '', '/');
 
-if (initialTab === 'members' && initialCode) {
-  showScreen('join-code');
-  document.getElementById('joinCode').value = initialCode.toUpperCase();
-  loadMembersScreen(initialCode);
-} else if (initialTab === 'join' || initialCode) {
+if (resumingCreate) {
+  showScreen('create-yourname');
+} else if (initialCode || initialTab === 'join') {
   showScreen('join-code');
   if (initialCode) document.getElementById('joinCode').value = initialCode.toUpperCase();
 } else {
   showScreen('home');
 }
+
+// Signed in: account menu, "Your carpools", prefilled name/email. Signed out:
+// a "Sign in" link (no prompt).
+auth.currentUser().then((user) => {
+  const accountEl = document.getElementById('userButton');
+  if (!user) {
+    // Came back from the sign-in page without signing in: back to the review.
+    if (resumingCreate) showScreen('create-confirm');
+    auth.ready.then(() => {
+      accountEl.innerHTML = `<a class="sign-in-link" href="${escapeHtml(auth.signInUrl('/'))}">Sign in</a>`;
+    }, () => {});
+    return;
+  }
+  auth.mountUserButton(accountEl);
+  prefillFromAccount(user);
+  renderMyCarpools();
+  if (initialCode && !resumingCreate) lookUpCarpool(initialCode);
+});

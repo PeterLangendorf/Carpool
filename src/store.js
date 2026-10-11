@@ -245,7 +245,7 @@ function composeChildName(firstName, lastNameOverride, parentLastName) {
 }
 
 // Secret per-member token for email unsubscribe links. Member IDs alone
-// aren't enough — anyone with the join code can see them.
+// aren't enough — every member of the carpool can see them.
 function generateUnsubscribeToken() {
   return crypto.randomBytes(16).toString('hex');
 }
@@ -267,6 +267,8 @@ function buildMember(member) {
   });
   return {
     id: 'm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+    // The Clerk user this member belongs to (see src/auth.js).
+    userId: member.userId || null,
     name: member.name.trim(),
     lastName,
     email: (member.email || '').trim(),
@@ -326,6 +328,11 @@ async function createCarpoolWithOwner(details, memberInput, activityDatesInput) 
 async function addMember(code, member) {
   const db = await load();
   const carpool = getCarpoolOrThrow(db, code);
+  if (member.userId && carpool.members.some((m) => m.userId === member.userId)) {
+    const err = new Error("You're already in this carpool");
+    err.status = 409;
+    throw err;
+  }
   const newMember = buildMember(member);
   carpool.members.push(newMember);
   await save(db);
@@ -554,6 +561,34 @@ async function releaseUpdateEmailSlot(code, claimedAt) {
   return carpool;
 }
 
+// Links members from before sign-in existed (no userId) to a signed-in user
+// whose verified email matches the one they gave when joining. Looks at one
+// carpool (by code) or all of them, never links a second member into a
+// carpool the user is already in, and returns the carpools it looked at.
+// One load/save.
+async function linkMembersByEmail(userId, verifiedEmails, code) {
+  const emails = new Set(verifiedEmails.map((e) => e.toLowerCase()));
+  const db = await load();
+  const carpools = code ? [getCarpoolOrThrow(db, code)] : Object.values(db.carpools);
+  let changed = false;
+  carpools.forEach((carpool) => {
+    if (carpool.members.some((m) => m.userId === userId)) return;
+    const match = carpool.members.find((m) => !m.userId && m.email && emails.has(m.email.toLowerCase()));
+    if (match) {
+      match.userId = userId;
+      changed = true;
+    }
+    if (materializeRecurrence(carpool)) changed = true;
+  });
+  if (changed) await save(db);
+  return carpools;
+}
+
+// Every carpool, for the signed-in user's "Your carpools" list. Read-only.
+async function getAllCarpools() {
+  return Object.values((await load()).carpools);
+}
+
 function tokensMatch(a, b) {
   const x = Buffer.from(String(a || ''));
   const y = Buffer.from(String(b || ''));
@@ -578,6 +613,8 @@ async function setEmailSubscription(code, memberId, token, subscribed) {
 
 module.exports = {
   getCarpool,
+  getAllCarpools,
+  linkMembersByEmail,
   prepareCarpoolsForEmail,
   releaseUpdateEmailSlot,
   setEmailSubscription,

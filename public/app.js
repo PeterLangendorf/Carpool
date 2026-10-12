@@ -212,13 +212,22 @@ function addAddressRow(container) {
     else row.querySelector('.address-input').value = '';
   });
   container.appendChild(row);
+  AddressAutocomplete.attach(row.querySelector('.address-input'));
 }
 
+// The filled-in addresses, and (same order) whether each was picked from
+// the map suggestions.
 function getAddressEntries(container) {
-  return Array.from(container.querySelectorAll('.address-input'))
-    .map((input) => input.value.trim())
-    .filter(Boolean);
+  const inputs = Array.from(container.querySelectorAll('.address-input')).filter((input) => input.value.trim());
+  return {
+    addresses: inputs.map((input) => input.value.trim()),
+    verified: inputs.map((input) => AddressAutocomplete.isVerified(input)),
+  };
 }
+
+// Address suggestions for the activity's location too (it's the end of every
+// drop off route).
+AddressAutocomplete.attach(document.getElementById('createActivityLocation'));
 
 document.querySelectorAll('[data-add-address]').forEach((btn) => {
   const container = document.querySelector(`[data-addresslist="${btn.dataset.addAddress}"]`);
@@ -360,11 +369,32 @@ function showScreen(name) {
     }
   });
   currentScreenName = name;
+  if (name === 'create-candrive' || name === 'join-new-candrive') updateDriveNextLabel(name);
   document.body.classList.toggle('on-home', name === 'home');
   document.querySelector('meta[name="theme-color"]').setAttribute('content', name === 'home' ? '#174597' : '#f7f4ee');
   updateFlowProgress(name);
   window.scrollTo(0, 0);
 }
+
+// Whoever's filling in this flow has riders (who need rides).
+function hasRiders(screenName) {
+  return (screenName === 'create-candrive' ? wizard : joinWizard).children.length > 0;
+}
+
+// The driving-days step asks about seats next only if some days are ticked.
+// Someone with riders can leave them all unticked (not driving), and then
+// the button finishes; someone without riders has to drive, so it doesn't.
+function updateDriveNextLabel(screenName) {
+  const screen = document.querySelector(`[data-screen="${screenName}"]`);
+  const button = screen.querySelector('button[type="submit"]');
+  const anyTicked = Boolean(screen.querySelector('[id$="DriveList"] input:checked'));
+  button.textContent = anyTicked || !hasRiders(screenName) ? 'Next' : button.dataset.finishLabel;
+  screen.querySelector('[data-optional-hint]').classList.toggle('hidden', !hasRiders(screenName));
+}
+
+['create-candrive', 'join-new-candrive'].forEach((screenName) => {
+  document.querySelector(`[data-screen="${screenName}"]`).addEventListener('change', () => updateDriveNextLabel(screenName));
+});
 
 // ---- Create/join step progress ----
 // Each step lists the screens that count as it, so the car only moves when the
@@ -386,11 +416,11 @@ const FLOWS = {
     title: 'Add yourself',
     steps: [
       ['create-yourname'],
-      ['create-seats'],
       ['create-children'],
       ['create-address'],
       ['create-needsride'],
       ['create-candrive'],
+      ['create-seats'],
     ],
     doneScreen: 'create-success',
   },
@@ -399,11 +429,11 @@ const FLOWS = {
     steps: [
       ['join-code'],
       ['join-new-name'],
-      ['join-new-seats'],
       ['join-new-children'],
       ['join-new-address'],
       ['join-new-needsride'],
       ['join-new-candrive'],
+      ['join-new-seats'],
     ],
   },
 };
@@ -530,7 +560,9 @@ async function joinWithCode(code) {
 
 document.getElementById('joinCodeForm').addEventListener('submit', (e) => {
   e.preventDefault();
-  joinWithCode(document.getElementById('joinCode').value.trim());
+  const code = document.getElementById('joinCode').value.trim();
+  if (!code) return showError(document.getElementById('joinCodeError'), 'Enter the 6-character code you were given.');
+  joinWithCode(code);
 });
 
 document.getElementById('homeJoinForm').addEventListener('submit', (e) => {
@@ -548,6 +580,7 @@ const joinWizard = {
   lastName: '',
   email: '',
   addresses: [],
+  addressesVerified: [], // whether each address was picked from the map suggestions
   seats: '',
   children: [],
   needsRideThereDays: [],
@@ -569,18 +602,6 @@ document.querySelector('[data-step-form="join-new-name"]').addEventListener('sub
   joinWizard.firstName = firstName;
   joinWizard.lastName = lastName;
   joinWizard.email = email;
-  showScreen('join-new-seats');
-});
-
-document.querySelector('[data-step-form="join-new-seats"]').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const errorEl = document.getElementById('joinNewSeatsError');
-  const seats = Number(document.getElementById('joinNewSeats').value);
-  if (!Number.isInteger(seats) || seats < 0 || seats > 15) {
-    return showError(errorEl, 'Enter a whole number of passengers between 0 and 15');
-  }
-  showError(errorEl, '');
-  joinWizard.seats = seats;
   showScreen('join-new-children');
 });
 
@@ -597,13 +618,16 @@ document.querySelector('[data-step-form="join-new-children"]').addEventListener(
   }
 });
 
-document.querySelector('[data-step-form="join-new-address"]').addEventListener('submit', (e) => {
+document.querySelector('[data-step-form="join-new-address"]').addEventListener('submit', async (e) => {
   e.preventDefault();
   const errorEl = document.getElementById('joinNewAddressError');
-  const addresses = getAddressEntries(document.querySelector('[data-addresslist="joinNew"]'));
+  const list = document.querySelector('[data-addresslist="joinNew"]');
+  const { addresses, verified } = getAddressEntries(list);
   if (!addresses.length) return showError(errorEl, 'Please enter at least one address');
+  if (!(await AddressAutocomplete.confirmUnverified(Array.from(list.querySelectorAll('.address-input'))))) return;
   showError(errorEl, '');
   joinWizard.addresses = addresses;
+  joinWizard.addressesVerified = verified;
   goToJoinDaysStep();
 });
 
@@ -654,15 +678,35 @@ document.getElementById('backFromJoinCanDrive').addEventListener('click', () => 
   showScreen(joinWizard.children.length > 0 ? 'join-new-needsride' : 'join-new-children');
 });
 
-document.querySelector('[data-step-form="join-new-candrive"]').addEventListener('submit', async (e) => {
+// Days ticked: on to how many seats. None: not driving, so join now (if
+// they have riders; otherwise they'd have no part in the carpool).
+document.querySelector('[data-step-form="join-new-candrive"]').addEventListener('submit', (e) => {
   e.preventDefault();
   const errorEl = document.getElementById('joinNewCanDriveError');
-  const submitBtn = document.getElementById('joinCarpoolSubmit');
   const { thereDays, backDays } = getLegDaySelection(document.getElementById('joinNewDriveList'));
   showError(errorEl, '');
   joinWizard.canDriveThereDays = thereDays;
   joinWizard.canDriveBackDays = backDays;
+  if (thereDays.length || backDays.length) return showScreen('join-new-seats');
+  if (!hasRiders('join-new-candrive')) return showError(errorEl, "Pick at least one day you can drive. You haven't added any riders, so driving is how you'd take part.");
+  joinWizard.seats = 0;
+  submitJoin(errorEl, document.getElementById('joinDriveNext'));
+});
 
+document.querySelector('[data-step-form="join-new-seats"]').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById('joinNewSeatsError');
+  const seats = Number(document.getElementById('joinNewSeats').value);
+  if (!Number.isInteger(seats) || seats < 1 || seats > 15) {
+    return showError(errorEl, 'Enter a whole number of passengers between 1 and 15');
+  }
+  showError(errorEl, '');
+  joinWizard.seats = seats;
+  submitJoin(errorEl, document.getElementById('joinCarpoolSubmit'));
+});
+
+// Sends the join request; `errorEl`/`submitBtn` are the last screen's.
+async function submitJoin(errorEl, submitBtn) {
   const children = joinWizard.children.map((c) => ({
     ...c,
     needsRideThereDays: joinWizard.needsRideThereDays,
@@ -679,6 +723,7 @@ document.querySelector('[data-step-form="join-new-candrive"]').addEventListener(
         lastName: joinWizard.lastName,
         email: joinWizard.email,
         addresses: joinWizard.addresses,
+        addressesVerified: joinWizard.addressesVerified,
         rideAddresses: joinWizard.rideAddresses,
         seats: joinWizard.seats,
         canDriveThereDays: joinWizard.canDriveThereDays,
@@ -695,7 +740,7 @@ document.querySelector('[data-step-form="join-new-candrive"]').addEventListener(
     submitBtn.disabled = false;
     showError(errorEl, err.message);
   }
-});
+}
 
 // ---- Create flow: multi-screen wizard ----
 const wizard = {
@@ -704,10 +749,12 @@ const wizard = {
   lastName: '',
   email: '',
   addresses: [],
+  addressesVerified: [], // whether each address was picked from the map suggestions
   seats: '',
   children: [],
   activityName: '',
   activityLocation: '',
+  activityLocationVerified: false,
   dateMode: null, // 'recurring' | 'specific'
   activityDates: [], // materialized dates for 'specific' mode; empty for 'recurring' (server materializes)
   activeWeekdays: [], // Sun-Sat sorted weekdays the activity is active on
@@ -774,18 +821,6 @@ document.querySelector('[data-step-form="create-yourname"]').addEventListener('s
   wizard.firstName = firstName;
   wizard.lastName = lastName;
   wizard.email = email;
-  showScreen('create-seats');
-});
-
-document.querySelector('[data-step-form="create-seats"]').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const errorEl = document.getElementById('createSeatsError');
-  const seats = Number(document.getElementById('createSeats').value);
-  if (!Number.isInteger(seats) || seats < 0 || seats > 15) {
-    return showError(errorEl, 'Enter a whole number of passengers between 0 and 15');
-  }
-  showError(errorEl, '');
-  wizard.seats = seats;
   showScreen('create-children');
 });
 
@@ -802,26 +837,31 @@ document.querySelector('[data-step-form="create-children"]').addEventListener('s
   }
 });
 
-document.querySelector('[data-step-form="create-address"]').addEventListener('submit', (e) => {
+document.querySelector('[data-step-form="create-address"]').addEventListener('submit', async (e) => {
   e.preventDefault();
   const errorEl = document.getElementById('createAddressError');
-  const addresses = getAddressEntries(document.querySelector('[data-addresslist="create"]'));
+  const list = document.querySelector('[data-addresslist="create"]');
+  const { addresses, verified } = getAddressEntries(list);
   if (!addresses.length) return showError(errorEl, 'Please enter at least one address');
+  if (!(await AddressAutocomplete.confirmUnverified(Array.from(list.querySelectorAll('.address-input'))))) return;
   showError(errorEl, '');
   wizard.addresses = addresses;
+  wizard.addressesVerified = verified;
   goToDaysStep();
 });
 
-document.querySelector('[data-step-form="create-activity"]').addEventListener('submit', (e) => {
+document.querySelector('[data-step-form="create-activity"]').addEventListener('submit', async (e) => {
   e.preventDefault();
   const errorEl = document.getElementById('createActivityError');
   const activityName = document.getElementById('createActivityName').value.trim();
   const activityLocation = document.getElementById('createActivityLocation').value.trim();
   if (!activityName) return showError(errorEl, 'Please enter the name of the activity');
   if (!activityLocation) return showError(errorEl, 'Please enter where the activity takes place');
+  if (!(await AddressAutocomplete.confirmUnverified([document.getElementById('createActivityLocation')]))) return;
   showError(errorEl, '');
   wizard.activityName = activityName;
   wizard.activityLocation = activityLocation;
+  wizard.activityLocationVerified = AddressAutocomplete.isVerified(document.getElementById('createActivityLocation'));
   showScreen('create-datetype');
 });
 
@@ -1215,6 +1255,7 @@ function restoreCreateDraft() {
   document.getElementById('createCarpoolName').value = wizard.carpoolName;
   document.getElementById('createActivityName').value = wizard.activityName;
   document.getElementById('createActivityLocation').value = wizard.activityLocation;
+  AddressAutocomplete.setVerified(document.getElementById('createActivityLocation'), Boolean(wizard.activityLocationVerified));
   if (wizard.dateMode === 'recurring' && wizard.recurrence) {
     document.querySelectorAll('[data-daypicker="createRecurringWeekdays"] input').forEach((input) => {
       input.checked = wizard.recurrence.weekdays.includes(Number(input.value));
@@ -1269,16 +1310,35 @@ document.getElementById('backFromCanDrive').addEventListener('click', () => {
   showScreen(wizard.children.length > 0 ? 'create-needsride' : 'create-children');
 });
 
-document.querySelector('[data-step-form="create-candrive"]').addEventListener('submit', async (e) => {
+// Days ticked: on to how many seats. None: not driving, so create now (if
+// they have riders; otherwise they'd have no part in the carpool).
+document.querySelector('[data-step-form="create-candrive"]').addEventListener('submit', (e) => {
   e.preventDefault();
   const errorEl = document.getElementById('createCanDriveError');
-  const submitBtn = document.getElementById('createCarpoolSubmit');
   const { thereDays, backDays } = getLegDaySelection(document.getElementById('createCanDriveList'));
-  if (thereDays.length === 0 && backDays.length === 0) return showError(errorEl, 'Pick at least one day/leg you can drive');
   showError(errorEl, '');
   wizard.canDriveThereDays = thereDays;
   wizard.canDriveBackDays = backDays;
+  if (thereDays.length || backDays.length) return showScreen('create-seats');
+  if (!hasRiders('create-candrive')) return showError(errorEl, "Pick at least one day you can drive. You haven't added any riders, so driving is how you'd take part.");
+  wizard.seats = 0;
+  submitCreate(errorEl, document.getElementById('createDriveNext'));
+});
 
+document.querySelector('[data-step-form="create-seats"]').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById('createSeatsError');
+  const seats = Number(document.getElementById('createSeats').value);
+  if (!Number.isInteger(seats) || seats < 1 || seats > 15) {
+    return showError(errorEl, 'Enter a whole number of passengers between 1 and 15');
+  }
+  showError(errorEl, '');
+  wizard.seats = seats;
+  submitCreate(errorEl, document.getElementById('createCarpoolSubmit'));
+});
+
+// Creates the carpool; `errorEl`/`submitBtn` are the last screen's.
+async function submitCreate(errorEl, submitBtn) {
   const children = wizard.children.map((c) => ({
     ...c,
     needsRideThereDays: wizard.needsRideThereDays,
@@ -1295,10 +1355,12 @@ document.querySelector('[data-step-form="create-candrive"]').addEventListener('s
         carpoolName: wizard.carpoolName,
         activityName: wizard.activityName,
         activityLocation: wizard.activityLocation,
+        activityLocationVerified: Boolean(wizard.activityLocationVerified),
         firstName: wizard.firstName,
         lastName: wizard.lastName,
         email: wizard.email,
         addresses: wizard.addresses,
+        addressesVerified: wizard.addressesVerified || [],
         rideAddresses: wizard.rideAddresses,
         seats: wizard.seats,
         children,
@@ -1321,7 +1383,7 @@ document.querySelector('[data-step-form="create-candrive"]').addEventListener('s
     submitBtn.disabled = false;
     showError(errorEl, err.message);
   }
-});
+}
 
 document.getElementById('createdCode').addEventListener('click', async () => {
   const el = document.getElementById('createdCode');

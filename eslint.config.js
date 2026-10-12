@@ -22,9 +22,16 @@ module.exports = [
   },
   {
     // Each page's own script uses what the shared ones define: auth.js
-    // `auth`, activity-times.js `ActivityTimes` and loader.js `CAR_SVG`.
-    files: ['public/app.js', 'public/dashboard.js', 'public/sign-in.js'],
-    languageOptions: { globals: { auth: 'readonly', ActivityTimes: 'readonly', CAR_SVG: 'readonly' } },
+    // `auth`, activity-times.js `ActivityTimes`, loader.js `CAR_SVG`,
+    // address-autocomplete.js `AddressAutocomplete` and dialog.js `Dialog`.
+    files: ['public/app.js', 'public/dashboard.js', 'public/sign-in.js', 'public/notifications.js'],
+    languageOptions: {
+      globals: { auth: 'readonly', ActivityTimes: 'readonly', CAR_SVG: 'readonly', AddressAutocomplete: 'readonly', Dialog: 'readonly' },
+    },
+  },
+  {
+    files: ['public/address-autocomplete.js'],
+    languageOptions: { globals: { Dialog: 'readonly' } },
   },
   {
     // Also require()d by the server.

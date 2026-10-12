@@ -168,7 +168,9 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}, h
     const thereFixed = fixedFor('there');
     const backFixed = fixedFor('back');
 
-    const canDrive = (m, leg) => (m[leg === 'there' ? 'canDriveThereDays' : 'canDriveBackDays'] || []).includes(weekday) && !unavailable[leg].has(m.id);
+    // No seats means not driving, whatever days are saved.
+    const canDrive = (m, leg) =>
+      m.seats > 0 && (m[leg === 'there' ? 'canDriveThereDays' : 'canDriveBackDays'] || []).includes(weekday) && !unavailable[leg].has(m.id);
     const thereEligible = members.filter((m) => canDrive(m, 'there'));
     const backEligible = members.filter((m) => canDrive(m, 'back'));
 

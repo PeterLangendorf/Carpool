@@ -20,7 +20,10 @@
   <header class="dash-band">
     <div class="dash-top">
       <button type="button" id="homeBtn" class="top-back"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Home</span></button>
-      <span class="code-badge" id="codeBadge" role="button" tabindex="0" aria-label="Join code, tap to copy"></span>
+      <div class="dash-top-actions">
+        <div id="notifBell"></div>
+        <span class="code-badge" id="codeBadge" role="button" tabindex="0" aria-label="Join code, tap to copy"></span>
+      </div>
     </div>
     <h1 id="carpoolName">Carpool</h1>
     <p class="dash-sub hidden" id="activitySummary"></p>
@@ -28,6 +31,7 @@
   <nav class="tabs" role="tablist" aria-label="Carpool sections">
     <button type="button" role="tab" class="tab active" data-tab="schedule" aria-selected="true">Schedule</button>
     <button type="button" role="tab" class="tab" data-tab="people" aria-selected="false">People</button>
+    <button type="button" role="tab" class="tab" data-tab="export" aria-selected="false">Export</button>
     <button type="button" role="tab" class="tab" data-tab="settings" aria-selected="false">Settings<span class="tab-badge hidden" id="settingsBadge"></span></button>
   </nav>
 
@@ -85,6 +89,54 @@
   </section>
 
   <!-- SETTINGS -->
+  <!-- EXPORT: calendar subscription, maps app, printing -->
+  <section class="tab-panel hidden" data-panel="export">
+    <div>
+      <h2 class="section-title">Calendar</h2>
+      <div class="card export-card">
+        <p class="subtitle">Add your drives and your riders' rides to your calendar. It keeps itself up to date when the schedule changes.</p>
+        <div class="export-actions">
+          <a class="btn" id="appleCalendarLink" href="#">Add to Apple Calendar</a>
+          <a class="btn secondary" id="googleCalendarLink" href="#" target="_blank" rel="noopener">Add to Google Calendar</a>
+          <button type="button" class="secondary" id="copyCalendarLink">Copy link for other apps</button>
+        </div>
+        <p class="field-help">Anyone with this link can see your rides and the addresses on them, so only add it to your own calendar. <button type="button" class="text-btn" id="resetCalendarLink">Reset link</button></p>
+        <p class="error hidden" id="calendarError"></p>
+      </div>
+    </div>
+    <div>
+      <h2 class="section-title">Maps</h2>
+      <div class="card export-card">
+        <p class="subtitle">Open addresses and routes in:</p>
+        <div class="maps-choice" role="radiogroup" aria-label="Maps app">
+          <label><input type="radio" name="mapsApp" value="apple" /> Apple Maps</label>
+          <label><input type="radio" name="mapsApp" value="google" /> Google Maps</label>
+        </div>
+        <p class="field-help">Saved on this device.</p>
+        <div id="nextDriveMaps"></div>
+      </div>
+    </div>
+    <div>
+      <h2 class="section-title">Print</h2>
+      <div class="card export-card">
+        <p class="subtitle">A printable copy of the schedule.</p>
+        <div class="field">
+          <label for="printRange">Dates</label>
+          <select id="printRange">
+            <option value="14">Next 2 weeks</option>
+            <option value="28" selected>Next 4 weeks</option>
+            <option value="91">Next 3 months</option>
+          </select>
+        </div>
+        <label class="same-lastname-check" for="printMineOnly">
+          <input type="checkbox" id="printMineOnly" />
+          Only rides I'm driving or my riders are in
+        </label>
+        <button type="button" id="printBtn">Print</button>
+      </div>
+    </div>
+  </section>
+
   <section class="tab-panel hidden" data-panel="settings">
     <div class="hidden" id="joinRequestsSection">
       <h2 class="section-title">Waiting to join</h2>
@@ -104,11 +156,6 @@
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.8 7l8.2 6.2L20.2 7"/></svg><span class="menu-label">Email everyone</span><svg class="icon menu-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
       </button>
       </div>
-      <label class="same-lastname-check" for="requireApprovalToggle">
-        <input type="checkbox" id="requireApprovalToggle" />
-        Approve people before they can join with the code
-      </label>
-      <p class="error hidden" id="requireApprovalError"></p>
     </div>
     <div>
       <h2 class="section-title">This carpool</h2>
@@ -269,11 +316,18 @@
     </div>
     <p class="subtitle" id="routeDateLabel"></p>
     <div id="routeStops"></div>
+    <a class="btn secondary" id="routeDirectionsBtn" href="#" target="_blank" rel="noopener"></a>
+    <p class="field-help" id="routeDirectionsNote"></p>
   </div>
 </div>
 
+<div id="printView" aria-hidden="true"></div>
+
 <script src="/auth.js"></script>
 <script src="/activity-times.js"></script>
+<script src="/notifications.js"></script>
+<script src="/dialog.js"></script>
+<script src="/address-autocomplete.js"></script>
 <script src="/dashboard.js"></script>
 </body>
 </html>

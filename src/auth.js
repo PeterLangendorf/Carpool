@@ -5,6 +5,10 @@
 // Needs CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY. Without them, signed-in
 // routes answer 503 instead of crashing (Clerk's middleware throws when its
 // keys are missing).
+// Opt out of Clerk's usage telemetry (it only runs for development
+// instances). Clerk reads this when the library loads, so it's set here
+// rather than relying on it being in .env and Netlify's settings.
+process.env.CLERK_TELEMETRY_DISABLED ??= '1';
 const { clerkMiddleware, clerkClient, getAuth } = require('@clerk/express');
 const store = require('./store');
 

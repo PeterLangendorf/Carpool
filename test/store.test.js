@@ -26,6 +26,12 @@ const memberInput = (name, userId, extra = {}) => ({
   ...extra,
 });
 
+// Joining takes the organizer's approval.
+async function join(code, input) {
+  const { member } = await store.addMember(code, input);
+  return store.approveJoinRequest(code, member.id);
+}
+
 test('moves the old shared blob into one blob per carpool, keeping it as a backup', async () => {
   assert.ok(await store.getCarpool('AAAAAA'));
   assert.ok(fake.data.has('carpools/AAAAAA') && fake.data.has('carpools/BBBBBB'));
@@ -48,7 +54,7 @@ test('simultaneous saves, in one carpool or several, are all kept', async () => 
   const b = await store.getCarpool('BBBBBB');
   assert.strictEqual(a.members[0].children.length, N);
   assert.strictEqual(b.members[0].children.length, N);
-  assert.strictEqual(a.members.length, 1 + N);
+  assert.strictEqual(a.joinRequests.length, N);
   assert.strictEqual(a.activityName, 'Soccer');
   assert.strictEqual(b.activityLocation, 'Field 3');
 });
@@ -59,7 +65,7 @@ test('refused changes are not saved', async () => {
 });
 
 test('the last member leaving deletes the carpool', async () => {
-  const { carpool } = await store.createCarpoolWithOwner({ name: 'Short-lived', requireApproval: false }, memberInput('Sam', 'u9'));
+  const { carpool } = await store.createCarpoolWithOwner({ name: 'Short-lived' }, memberInput('Sam', 'u9'));
   assert.strictEqual(await store.removeMember(carpool.code, carpool.ownerId), null);
   assert.strictEqual(await store.getCarpool(carpool.code), null);
   await assert.rejects(store.addMember(carpool.code, memberInput('Late', 'z')), (e) => e.status === 404);
@@ -90,15 +96,15 @@ test('riders saved before name parts were stored are split sensibly', () => {
 test('the schedule for coming dates stays put as days go by', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-05T15:00:00Z') });
   const { carpool } = await store.createCarpoolWithOwner(
-    { name: 'Steady', timeZone: 'America/Chicago', requireApproval: false },
+    { name: 'Steady', timeZone: 'America/Chicago' },
     memberInput('Ann', 'u20', { children: [{ firstName: 'A1', needsRideThereDays: [1, 3], needsRideBackDays: [1, 3] }] }),
     { dates: [], times: {}, recurrence: { weekdays: [1, 3], startDate: '2026-10-05', endDate: '2026-11-30' } }
   );
-  await store.addMember(
+  await join(
     carpool.code,
     memberInput('Ben', 'u21', { children: [{ firstName: 'B1', needsRideThereDays: [1, 3], needsRideBackDays: [1, 3] }] })
   );
-  await store.addMember(carpool.code, memberInput('Cy', 'u22', { seats: 4 }));
+  await join(carpool.code, memberInput('Cy', 'u22', { seats: 4 }));
   const before = getScheduleResult(await store.getCarpool(carpool.code)).schedule;
 
   // A week and a half later, after several dates have gone by.
@@ -114,13 +120,13 @@ test('the schedule for coming dates stays put as days go by', async (t) => {
 test('someone joining later starts level with the others', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-05T15:00:00Z') });
   const { carpool } = await store.createCarpoolWithOwner(
-    { name: 'Newcomer', timeZone: 'UTC', requireApproval: false },
+    { name: 'Newcomer', timeZone: 'UTC' },
     memberInput('Ann', 'u30', { children: [{ firstName: 'A1', needsRideThereDays: [1], needsRideBackDays: [1] }] }),
     { dates: ['2026-10-05', '2026-10-12', '2026-10-19', '2026-10-26', '2026-11-02'], times: {} }
   );
-  await store.addMember(carpool.code, memberInput('Ben', 'u31'));
+  await join(carpool.code, memberInput('Ben', 'u31'));
   t.mock.timers.setTime(Date.parse('2026-10-27T15:00:00Z'));
-  const { member: late } = await store.addMember(carpool.code, memberInput('Cy', 'u32'));
+  const { member: late } = await join(carpool.code, memberInput('Cy', 'u32'));
   // 4 Mondays have passed with 2 rides each, shared by 2 people: 4 rides each.
   assert.strictEqual(late.driveCredit, 4);
 });

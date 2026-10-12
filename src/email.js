@@ -340,4 +340,4 @@ async function sendEmails(emails) {
   return sent;
 }
 
-module.exports = { sendCarpoolSummary, sendNotice, buildEmail, sendEmails, isEmailConfigured, formatDate };
+module.exports = { sendCarpoolSummary, sendNotice, buildEmail, sendEmails, isEmailConfigured, formatDate, rideStops };

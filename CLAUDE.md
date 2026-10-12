@@ -19,6 +19,8 @@ computes a fair driving schedule for each activity date.
   phones on the same Wi-Fi can connect. Data goes in `local-db.json` (gitignored) instead of
   Netlify Blobs, via the `LOCAL_DB_FILE` switch in `src/store.js`. Reads env vars from `.env`
   (gitignored) if present.
+- Address suggestions need `MAPBOX_TOKEN` (a Mapbox access token; it stays on the server).
+  Without it the address boxes are plain text boxes.
 - Sign-in needs `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` (from the Clerk dashboard) in
   `.env` locally and in the Netlify site's environment variables. Without them every carpool
   route answers 503 and the pages show "Sign-in unavailable".
@@ -96,7 +98,9 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   Maps links), so update it when any of that changes. `public/tos.html` is the terms of
   service at `/tos`. Both are linked from the home and sign-in pages.
 - `public/index.html` + `public/app.js` — the member-facing flow: home → create/join a
-  carpool → member form (name, address, seats, which days you can drive) → view schedule.
+  carpool → member form (name → riders → addresses → ride days → driving days → seats; the
+  seats step only appears if some driving days are ticked; with none ticked, someone with
+  riders finishes with 0 seats and someone without riders is asked to pick a day) → view schedule.
   Nobody is asked to sign in until it's needed: when looking up a join code, or after the
   create flow's "All set!" popup (before "Add yourself"). The carpool details entered so far
   are saved to localStorage (`saveCreateDraft`) and restored on `/?resume=create`, since
@@ -108,8 +112,9 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   the dashboard, and people waiting for approval to the `join-pending` screen.
 - `public/dashboard.html` + `public/dashboard.js` — a carpool's page: navy band, then tabs
   (`showTab`): Schedule (calendar, day details with "Can't make it" / "I'll drive it" on each
-  ride, per-date exclusions), People (members with drive counts, your riders/addresses) and
-  Settings (join requests, organizer tools, copy code, leave).
+  ride, per-date exclusions), People (members with drive counts, your riders/addresses),
+  Export (calendar subscription, maps app, printing) and Settings (join requests, organizer
+  tools, copy code, leave).
 
 ### UI conventions
 
@@ -120,13 +125,38 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   icons are small inline SVG line icons (`.icon`; `ICONS` in `dashboard.js`).
 - `showScreen` in `app.js` slides screens forward/back along each journey's order; overlays
   open as bottom sheets. All motion is disabled under `prefers-reduced-motion`.
+- Forms are `novalidate`: each submit handler checks its own fields and shows the message
+  with `showError`, so the browser's built-in "fill out this field" bubbles never appear.
+- Never use the browser's built-in `alert()` / `confirm()` / `prompt()` boxes. Use
+  `Dialog.confirm({ title, message, items, confirmText, cancelText, danger })` and
+  `Dialog.prompt({ title, label, placeholder, confirmText })` from `public/dialog.js` (both
+  return promises; the sheet sits above any other overlay).
 
 ### Domain model details worth knowing before editing
+
+- **Calendar feed** (`src/calendar.js`): `GET /api/calendar/:code/:memberId/:token.ics` is an
+  iCalendar feed of that member's upcoming drives and their riders' rides, for Apple/Google/
+  Outlook subscriptions. Calendar apps can't sign in, so the key is a secret per-member
+  `calendarToken` (made by `GET .../calendar`, replaced by `POST .../calendar/reset`;
+  stripped from API responses by `normalizeMembers`). Times are UTC from the carpool's time
+  zone (floating if it has none); drop offs end at the activity's start time, pick ups start
+  at its end, 30 minutes each.
+- **Maps app is a per-device choice** (Export tab, `localStorage` `carpooler.mapsApp`):
+  `mapsUrl`/`routeUrl` in `dashboard.js` build Apple or Google Maps links. Google Maps
+  directions take every stop (waypoints: up to 3 on phones, 9 elsewhere); Apple Maps links
+  can only hold one stop, so its route button goes to the first stop. Emails still use Apple
+  Maps links.
+- **Printing**: the Export tab fills `#printView` (outside the page) and calls
+  `window.print()`; print CSS hides everything else.
 
 - **Two independent legs per activity date**: "there" (drop-off) and "back" (pickup) each
   have their own eligible drivers, rider list, and time. A member's driving availability is
   `canDriveThereDays` / `canDriveBackDays`; a child's ride need is `needsRideThereDays` /
   `needsRideBackDays` — all as arrays of weekday numbers (0=Sunday..6=Saturday), not dates.
+  Each is optional but not both: a member drives, has riders who need rides, or both
+  (`validateMemberInput` refuses neither, and so does the driving-days step). `seats: 0`
+  means not driving: the API saves no drive days for them and `buildSchedule` never picks a
+  member with no seats.
 - **Activity times resolve most-specific-wins**: `perDate` overrides `perWeekday` overrides
   `uniform`. The rule lives once, in `public/activity-times.js`: the server `require`s it and
   the pages load it as a script (`window.ActivityTimes`, aliased `resolveTimes`).
@@ -170,12 +200,22 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   it" takes you off that ride (and out of its lock), and the fairest other driver is picked;
   "I'll drive it" puts you first on it. Anyone newly put on a locked ride is emailed.
   `dateOverrides[date]` always keeps `excludedChildIds` (code iterates it).
-- **Joining can need the organizer's approval**: `carpool.requireApproval` (on for new
-  carpools, off for ones from before it existed; toggled in Settings). Joining then adds the
-  member to `carpool.joinRequests` instead of `members` (`POST .../members` answers 202
-  `{ pending: true }` and emails the organizer); the organizer answers with `POST
-  .../join-requests/:memberId/approve|decline`. Only the organizer gets `joinRequests` from
-  the API.
+- **Every join needs the organizer's approval**, in every carpool (old ones included; a
+  leftover `requireApproval` field in stored carpools is ignored). Joining adds the member to
+  `carpool.joinRequests` instead of `members` (`POST .../members` answers 202
+  `{ pending: true }`, emails the organizer and notifies them); the organizer answers with
+  `POST .../join-requests/:memberId/approve|decline`. Only the organizer gets `joinRequests`
+  from the API.
+- **Notifications are in-app, per user**: `inbox/<userId>` blobs (`{ items }`, newest first,
+  capped at 50) via `store.addNotification`; `GET /api/notifications` and `POST
+  /api/notifications/read`. `src/notifications.js` decides who's told what: the organizer
+  about join requests; the person asking when approved/declined (they aren't a member yet,
+  hence per-user rather than per-carpool); members when someone joins or leaves, when the
+  organizer changes dates/times or the name/activity/location, when they become organizer,
+  and when a locked ride is handed to them or taken over. The person who made a change
+  isn't told about it. `public/notifications.js` mounts the bell into `#notifBell` (home
+  hero and carpool band) and polls every minute while the page is visible. Links can open a
+  dashboard tab with `?tab=schedule|people|settings`.
 - **Each user has a list of their carpools**: `users/<userId>` blobs (`{ codes, complete }`)
   so `GET /api/my-carpools` reads only that user's carpools. The first time (no complete
   list), `auth.getUserCarpools` scans every carpool, claims legacy members by email, and
@@ -192,6 +232,20 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   single `address` field is still written (as the first address) and upgraded on read by
   `normalizeMembers`. Members edit theirs later via `PUT .../members/:memberId/addresses`
   (entries keep their `id` so existing ride choices survive edits).
+- **Address suggestions are recommended, not required**: `public/address-autocomplete.js`
+  (`AddressAutocomplete.attach(input)`) shows Mapbox Address Autofill suggestions under every
+  address box (create/join, My addresses, activity location), through our own `GET
+  /api/address-suggestions` (`src/address-suggestions.js`) so the token never reaches a
+  browser (the account has no payment details, so its token can't be URL-restricted). That
+  endpoint works signed out (the activity location comes before sign-in), so it only answers
+  same-origin requests and rate-limits each visitor; it biases results with Netlify's
+  `x-nf-geo` visitor location when present, else sticks to the US. A typed address is still
+  accepted: the box notes it wasn't found, and saving asks "Use it anyway?" in a `Dialog`
+  (`await AddressAutocomplete.confirmUnverified(inputs)`, only for new or changed
+  addresses). Addresses picked from the list are saved
+  with `verified: true` (`addressesVerified` on create/join; `verified` per entry on `PUT
+  .../addresses`; `activityLocationVerified` on the carpool). Mapbox's terms forbid storing
+  its coordinates, so only the text is saved.
 - **Carpools have `activityName` / `activityLocation`**; the location is the end of every
   drop-off route and the start of every pick-up route in the dashboard's route overlay.
   The owner edits them (and the carpool name) via `PATCH /api/carpools/:code/details`.

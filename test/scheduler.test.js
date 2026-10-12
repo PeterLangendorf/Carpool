@@ -53,3 +53,10 @@ test('carrying on from history gives the same schedule as one long run', () => {
   const rest = buildSchedule(members, MONDAYS.slice(3), {}, {}, { counts, lastDriven }).schedule;
   assert.deepStrictEqual(rest.map(drivers), full.slice(3).map(drivers));
 });
+
+test('members with no seats are never picked to drive', () => {
+  const members = [member('a', 0, [1], ['a1']), member('b', 2, [1])];
+  const [entry] = buildSchedule(members, ['2026-10-05']).schedule;
+  assert.deepStrictEqual(entry.there.drivers.map((d) => d.id), ['b']);
+  assert.deepStrictEqual(entry.back.drivers.map((d) => d.id), ['b']);
+});

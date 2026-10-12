@@ -18,12 +18,16 @@ const memberInput = (name, userId, extra = {}) => ({
 const kid = (firstName) => ({ firstName, needsRideThereDays: [0, 1, 2, 3, 4, 5, 6], needsRideBackDays: [0, 1, 2, 3, 4, 5, 6] });
 const ids = (leg) => leg.drivers.map((d) => d.id).sort();
 
-test('new carpools ask the organizer to approve people who join', async () => {
+// Joining takes the organizer's approval.
+async function join(code, input) {
+  const { member } = await store.addMember(code, input);
+  return store.approveJoinRequest(code, member.id);
+}
+
+test('everyone who joins has to be approved by the organizer', async () => {
   const { carpool } = await store.createCarpoolWithOwner({ name: 'Approve' }, memberInput('Olive', 'owner1'));
-  assert.strictEqual(carpool.requireApproval, true);
 
   const joined = await store.addMember(carpool.code, memberInput('Jo', 'joiner1'));
-  assert.strictEqual(joined.pending, true);
   let current = await store.getCarpool(carpool.code);
   assert.strictEqual(current.members.length, 1);
   assert.ok(store.findPendingRequest(current, 'joiner1'));
@@ -41,18 +45,16 @@ test('new carpools ask the organizer to approve people who join', async () => {
   assert.strictEqual(current.members.length, 2);
   assert.strictEqual(store.findPendingRequest(current, 'joiner2'), null);
 
-  await store.updateCarpoolDetails(carpool.code, { requireApproval: false });
-  assert.strictEqual((await store.addMember(carpool.code, memberInput('Ida', 'joiner3'))).pending, false);
 });
 
 test("each user's carpool list tracks joining and leaving", async () => {
-  const { carpool, member } = await store.createCarpoolWithOwner({ name: 'Index', requireApproval: false }, memberInput('Una', 'indexUser'));
+  const { carpool, member } = await store.createCarpoolWithOwner({ name: 'Index' }, memberInput('Una', 'indexUser'));
   assert.strictEqual(await store.getUserCarpoolCodes('indexUser'), null, 'not complete until a full scan');
   await store.setUserCarpoolCodes('indexUser', []);
   assert.deepStrictEqual(await store.getUserCarpoolCodes('indexUser'), [carpool.code]);
 
-  const { carpool: second } = await store.createCarpoolWithOwner({ name: 'Index 2', requireApproval: false }, memberInput('Vic', 'u2'));
-  const { member: joined } = await store.addMember(second.code, memberInput('Una', 'indexUser'));
+  const { carpool: second } = await store.createCarpoolWithOwner({ name: 'Index 2' }, memberInput('Vic', 'u2'));
+  const { member: joined } = await join(second.code, memberInput('Una', 'indexUser'));
   assert.deepStrictEqual((await store.getUserCarpoolCodes('indexUser')).sort(), [carpool.code, second.code].sort());
 
   await store.removeMember(second.code, joined.id);
@@ -64,16 +66,16 @@ test('the coming week is locked in; later dates stay fair', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-05T15:00:00Z') });
   // Two one-seat drivers with a rider each: both drive every ride.
   const { carpool, member: ann } = await store.createCarpoolWithOwner(
-    { name: 'Locks', timeZone: 'UTC', requireApproval: false },
+    { name: 'Locks', timeZone: 'UTC' },
     memberInput('Ann', 'l1', { children: [kid('A1')] }),
     { dates: ['2026-10-06', '2026-10-08', '2026-10-27'], times: {} }
   );
-  const { member: ben } = await store.addMember(carpool.code, memberInput('Ben', 'l2', { children: [kid('B1')] }));
+  const { member: ben } = await join(carpool.code, memberInput('Ben', 'l2', { children: [kid('B1')] }));
   let current = await store.getCarpool(carpool.code);
   assert.deepStrictEqual(Object.keys(current.lockedDrives).sort(), ['2026-10-06', '2026-10-08']);
 
   // A newcomer with a big car would be the fairest pick from now on...
-  const { member: cy } = await store.addMember(carpool.code, memberInput('Cy', 'l3', { seats: 4 }));
+  const { member: cy } = await join(carpool.code, memberInput('Cy', 'l3', { seats: 4 }));
   current = await store.getCarpool(carpool.code);
   const byDate = Object.fromEntries(getScheduleResult(current).schedule.map((e) => [e.date, e]));
   // ...but this week's rides keep their drivers,

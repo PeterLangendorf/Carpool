@@ -41,6 +41,8 @@ const auth = (() => {
       signInUrl: '/sign-in',
       signUpUrl: '/sign-in',
       afterSignOutUrl: '/',
+      // Opt out of Clerk's usage telemetry (it only runs for development instances).
+      telemetry: false,
       // Match the site's look (navy, system font) instead of Clerk's defaults.
       appearance: {
         variables: {

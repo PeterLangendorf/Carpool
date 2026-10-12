@@ -11,6 +11,8 @@ const STORE_NAME = 'carpool-db';
 const CARPOOL_PREFIX = 'carpools/';
 // Each signed-in user's list of carpool codes (see getUserCarpoolCodes).
 const USER_PREFIX = 'users/';
+// Each signed-in user's notifications (see addNotification).
+const INBOX_PREFIX = 'inbox/';
 const LEGACY_DB_KEY = 'db';
 const MIGRATED_KEY = 'meta/split-into-carpool-blobs';
 
@@ -20,6 +22,10 @@ function carpoolKey(code) {
 
 function userKey(userId) {
   return USER_PREFIX + encodeURIComponent(userId);
+}
+
+function inboxKey(userId) {
+  return INBOX_PREFIX + encodeURIComponent(userId);
 }
 
 // LOCAL_DB_FILE (set by `npm run local`) swaps Netlify Blobs for a plain
@@ -238,6 +244,49 @@ async function setUserCarpoolCodes(userId, codes) {
     },
     { create: () => ({ codes: [], complete: false }) }
   );
+}
+
+// ---- Notifications ----
+// `inbox/<userId>` holds `{ items }`, newest first, at most MAX_NOTIFICATIONS.
+// Kept per user rather than per carpool so someone waiting to join (not a
+// member yet) can be told they were approved or declined. See
+// src/notifications.js for what's sent when.
+const MAX_NOTIFICATIONS = 50;
+
+// `notification`: { type, text, carpoolCode, carpoolName, link }.
+async function addNotification(userId, notification) {
+  if (!userId) return;
+  await updateBlob(
+    inboxKey(userId),
+    (inbox) => {
+      inbox.items.unshift({
+        id: 'n_' + crypto.randomBytes(8).toString('hex'),
+        createdAt: new Date().toISOString(),
+        read: false,
+        ...notification,
+      });
+      inbox.items = inbox.items.slice(0, MAX_NOTIFICATIONS);
+    },
+    { create: () => ({ items: [] }) }
+  );
+}
+
+async function getNotifications(userId) {
+  const entry = await getDbStore().getWithMetadata(inboxKey(userId), { type: 'json' });
+  return entry ? entry.data.items : [];
+}
+
+// Marks the given notifications (or all of them) read.
+async function markNotificationsRead(userId, ids) {
+  try {
+    await updateBlob(inboxKey(userId), (inbox) => {
+      inbox.items.forEach((n) => {
+        if (!ids || ids.includes(n.id)) n.read = true;
+      });
+    });
+  } catch (err) {
+    if (err.status !== 404) throw err;
+  }
 }
 
 // The carpools with these codes (refreshed like getCarpool), skipping any
@@ -527,7 +576,11 @@ function generateAddressId() {
 
 function buildMember(member) {
   const lastName = (member.lastName || '').trim();
-  const addresses = (member.addresses || []).map((address) => ({ id: generateAddressId(), address: String(address).trim() }));
+  // `verified`: picked from the map suggestions (see src/app.js parseAddresses).
+  const addresses = (member.addresses || []).map((a) => {
+    const entry = typeof a === 'string' ? { address: a } : a;
+    return { id: generateAddressId(), address: String(entry.address).trim(), ...(entry.verified ? { verified: true } : {}) };
+  });
   // Input ride addresses reference addresses by position in the submitted
   // list; store them by ID so later edits to the list can't shift them.
   const rideAddresses = { there: {}, back: {} };
@@ -558,8 +611,7 @@ function buildMember(member) {
 // Creates a carpool and its first (owner) member in one write, which only
 // succeeds if no blob exists for the code yet (so two creates can't land on
 // the same code); on a clash it tries another code. `details.timeZone` is the
-// creator's browser time zone. New carpools ask the organizer to approve
-// people who join with the code unless `details.requireApproval` is false.
+// creator's browser time zone.
 async function createCarpoolWithOwner(details, memberInput, activityDatesInput) {
   await migrateLegacyDb();
   const blobs = getDbStore();
@@ -572,9 +624,9 @@ async function createCarpoolWithOwner(details, memberInput, activityDatesInput) 
       name: details.name && details.name.trim() ? details.name.trim() : code,
       activityName: (details.activityName || '').trim(),
       activityLocation: (details.activityLocation || '').trim(),
+      activityLocationVerified: Boolean(details.activityLocationVerified),
       createdAt: new Date().toISOString(),
       timeZone: isValidTimeZone(details.timeZone) ? details.timeZone : null,
-      requireApproval: details.requireApproval !== false,
       joinRequests: [],
       ownerId: member.id,
       activityDates: [],
@@ -606,9 +658,10 @@ function admitMember(carpool, newMember) {
   carpool.members.push(newMember);
 }
 
-// Joins a carpool, or, if it requires approval, asks to: the member then
-// waits in `joinRequests` until the organizer approves (approveJoinRequest)
-// or declines them. Resolves to { member, carpool, pending }.
+// Asks to join a carpool: knowing the code isn't enough, so the member waits
+// in `joinRequests` until the organizer approves (approveJoinRequest) or
+// declines them. Asking again replaces an earlier request. Resolves to
+// { member, carpool }.
 async function addMember(code, member) {
   await addUserCarpool(member.userId, code);
   return updateCarpool(code, (carpool) => {
@@ -618,13 +671,9 @@ async function addMember(code, member) {
       throw err;
     }
     const newMember = buildMember(member);
-    if (carpool.requireApproval) {
-      carpool.joinRequests = (carpool.joinRequests || []).filter((r) => !member.userId || r.userId !== member.userId);
-      carpool.joinRequests.push({ ...newMember, requestedAt: new Date().toISOString() });
-      return { member: newMember, carpool, pending: true };
-    }
-    admitMember(carpool, newMember);
-    return { member: newMember, carpool, pending: false };
+    carpool.joinRequests = (carpool.joinRequests || []).filter((r) => !member.userId || r.userId !== member.userId);
+    carpool.joinRequests.push({ ...newMember, requestedAt: new Date().toISOString() });
+    return { member: newMember, carpool };
   });
 }
 
@@ -842,7 +891,7 @@ async function updateCarpoolDetails(code, details) {
       if (details[key] !== undefined) carpool[key] = String(details[key]).trim();
     });
     if (details.monthlyEmail !== undefined) carpool.monthlyEmail = Boolean(details.monthlyEmail);
-    if (details.requireApproval !== undefined) carpool.requireApproval = Boolean(details.requireApproval);
+    if (details.activityLocationVerified !== undefined) carpool.activityLocationVerified = Boolean(details.activityLocationVerified);
     return carpool;
   });
 }
@@ -873,6 +922,7 @@ async function setMemberAddresses(code, memberId, requesterId, addresses, rideAd
     member.addresses = addresses.map((a) => ({
       id: a.id && existingIds.has(a.id) ? a.id : generateAddressId(),
       address: a.address,
+      ...(a.verified ? { verified: true } : {}),
     }));
     member.address = member.addresses[0] ? member.addresses[0].address : '';
     member.rideAddresses = { there: {}, back: {} };
@@ -965,6 +1015,22 @@ function tokensMatch(a, b) {
 
 // Turns update/monthly emails off (or back on) for one member of one
 // carpool. Requires the secret token from their email's unsubscribe link.
+// The secret in a member's private calendar link (src/calendar.js), made the
+// first time they ask for the link. `reset` replaces it, so a link that's
+// been shared stops working.
+async function getCalendarToken(code, memberId, { reset = false } = {}) {
+  return updateCarpool(code, (carpool) => {
+    const member = carpool.members.find((m) => m.id === memberId);
+    if (!member) {
+      const err = new Error('Member not found');
+      err.status = 404;
+      throw err;
+    }
+    if (reset || !member.calendarToken) member.calendarToken = generateUnsubscribeToken();
+    return member.calendarToken;
+  });
+}
+
 async function setEmailSubscription(code, memberId, token, subscribed) {
   return updateCarpool(code, (carpool) => {
     const member = carpool.members.find((m) => m.id === memberId);
@@ -980,6 +1046,9 @@ async function setEmailSubscription(code, memberId, token, subscribed) {
 
 module.exports = {
   useLambdaBlobsContext,
+  addNotification,
+  getNotifications,
+  markNotificationsRead,
   getCarpools,
   getUserCarpoolCodes,
   setUserCarpoolCodes,
@@ -993,6 +1062,8 @@ module.exports = {
   prepareCarpoolsForEmail,
   releaseUpdateEmailSlot,
   setEmailSubscription,
+  getCalendarToken,
+  tokensMatch,
   updateCarpoolDetails,
   setMemberAddresses,
   createCarpoolWithOwner,

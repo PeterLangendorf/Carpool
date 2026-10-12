@@ -5,6 +5,9 @@ const { sendUpdateEmail } = require('./notify');
 const { getEffectiveOwnerId, normalizeMembers, normalizeActivityTimes, getScheduleResult } = require('./normalize');
 const { requireUser, requireMember, getMembership, getUserCarpools } = require('./auth');
 const { todayKey, weekdayOf } = require('./dates');
+const notify = require('./notifications');
+const { addressSuggestions } = require('./address-suggestions');
+const { buildCalendar } = require('./calendar');
 
 const app = express();
 app.use(express.json());
@@ -34,12 +37,15 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_ADDRESSES = 5;
 
 // Accepts the current `addresses: [string]` shape, falling back to the older
-// single `address` string.
+// single `address` string. `addressesVerified` (same order) says which were
+// picked from the map suggestions (public/address-autocomplete.js). Returns
+// [{ address, verified }].
 function parseAddresses(body) {
   const raw = Array.isArray(body.addresses) ? body.addresses : body.address ? [body.address] : [];
+  const verified = Array.isArray(body.addressesVerified) ? body.addressesVerified : [];
   return raw
-    .map((a) => String(a || '').trim())
-    .filter(Boolean)
+    .map((a, i) => ({ address: String(a || '').trim(), verified: verified[i] === true }))
+    .filter((a) => a.address)
     .slice(0, MAX_ADDRESSES);
 }
 
@@ -75,13 +81,18 @@ function validateMemberInput(body) {
     errors.push('Number of passengers must be a whole number between 0 and 15');
   }
 
-  const canDriveThereDays = parseDays(body.canDriveThereDays);
-  const canDriveBackDays = parseDays(body.canDriveBackDays);
-  if (canDriveThereDays.length === 0 && canDriveBackDays.length === 0) {
-    errors.push('Pick at least one day/leg you can drive');
-  }
+  // Driving is optional (so is needing rides): someone who can't drive picks
+  // no days, and anyone with no seats isn't scheduled to drive at all.
+  const canDriveThereDays = seats > 0 ? parseDays(body.canDriveThereDays) : [];
+  const canDriveBackDays = seats > 0 ? parseDays(body.canDriveBackDays) : [];
 
   const children = parseChildren(body.children);
+
+  // ...but not both: a member has riders who need rides, or drives, or both.
+  const needsRides = children.some((c) => c.needsRideThereDays.length || c.needsRideBackDays.length);
+  if (!needsRides && !canDriveThereDays.length && !canDriveBackDays.length) {
+    errors.push("Pick at least one day you can drive. You haven't added any riders, so driving is how you'd take part.");
+  }
 
   // An address is only needed to pick up/drop off riders — a driver-only
   // member can skip it.
@@ -105,8 +116,8 @@ function serializeCarpool(carpool, me) {
     name: carpool.name,
     activityName: carpool.activityName || '',
     activityLocation: carpool.activityLocation || '',
+    activityLocationVerified: Boolean(carpool.activityLocationVerified),
     monthlyEmail: Boolean(carpool.monthlyEmail),
-    requireApproval: Boolean(carpool.requireApproval),
     joinRequests: isOrganizer
       ? (carpool.joinRequests || []).map((r) => ({
           id: r.id,
@@ -139,6 +150,9 @@ app.get('/api/config', (req, res) => {
   res.json({ clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY || null });
 });
 
+// Public (needed before sign-in), but limited: see src/address-suggestions.js.
+app.get('/api/address-suggestions', addressSuggestions);
+
 // The signed-in user's carpools, for the home screen.
 app.get('/api/my-carpools', requireUser, async (req, res) => {
   try {
@@ -170,11 +184,33 @@ app.get('/api/my-carpools', requireUser, async (req, res) => {
   }
 });
 
+// The signed-in user's notifications, newest first, and how many are unread.
+app.get('/api/notifications', requireUser, async (req, res) => {
+  try {
+    const notifications = await store.getNotifications(req.userId);
+    res.json({ notifications, unread: notifications.filter((n) => !n.read).length });
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
+});
+
+// Body: { ids } to mark some notifications read, or nothing for all of them.
+app.post('/api/notifications/read', requireUser, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(String) : null;
+    await store.markNotificationsRead(req.userId, ids);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
+});
+
 app.post('/api/carpools', requireUser, async (req, res) => {
   const { dates, times, recurrence } = req.body;
   const carpoolName = String(req.body.carpoolName || '').trim();
   const activityName = String(req.body.activityName || '').trim();
   const activityLocation = String(req.body.activityLocation || '').trim();
+  const activityLocationVerified = req.body.activityLocationVerified === true;
   const { errors, member: memberInput } = validateMemberInput(req.body);
   if (!carpoolName) errors.push('Carpool name is required');
   if (!activityName) errors.push('Activity name is required');
@@ -184,7 +220,7 @@ app.post('/api/carpools', requireUser, async (req, res) => {
 
   try {
     const { carpool, member } = await store.createCarpoolWithOwner(
-      { name: carpoolName, activityName, activityLocation, timeZone: req.get('x-time-zone'), requireApproval: req.body.requireApproval !== false },
+      { name: carpoolName, activityName, activityLocation, activityLocationVerified, timeZone: req.get('x-time-zone') },
       { ...memberInput, userId: req.userId },
       dates !== undefined ? { dates, times: times || {}, recurrence } : null
     );
@@ -210,7 +246,6 @@ app.get('/api/carpools/:code/preview', requireUser, async (req, res) => {
     const { carpool, member } = await getMembership(req, req.params.code);
     res.json({
       isPending: !member && Boolean(store.findPendingRequest(carpool, req.userId)),
-      requireApproval: Boolean(carpool.requireApproval),
       code: carpool.code,
       name: carpool.name,
       activityName: carpool.activityName || '',
@@ -232,25 +267,20 @@ app.post('/api/carpools/:code/members', requireUser, async (req, res) => {
     // Also claims an older member of theirs by email, so they aren't added twice.
     const existing = await getMembership(req, req.params.code);
     if (existing.member) return res.status(409).json({ errors: ["You're already in this carpool"] });
-    const { member, carpool, pending } = await store.addMember(req.params.code, { ...memberInput, userId: req.userId });
-    if (pending) {
-      // The organizer approves (or declines) them from the dashboard.
-      const owner = carpool.members.find((m) => m.id === getEffectiveOwnerId(carpool));
-      if (owner) {
-        await sendNotice(
-          owner.email,
-          `${member.name} wants to join ${carpool.name}`,
-          [`Hi ${owner.name},`, `${member.name} used the join code to ask to join "${carpool.name}". Open the carpool's Settings tab to approve or decline them.`],
-          `${siteUrl(req)}/dashboard.html?code=${encodeURIComponent(carpool.code)}`
-        );
-      }
-      return res.status(202).json({ pending: true });
+    // Everyone has to be let in by the organizer, who approves (or declines)
+    // them from the dashboard's Settings tab.
+    const { member, carpool } = await store.addMember(req.params.code, { ...memberInput, userId: req.userId });
+    const owner = carpool.members.find((m) => m.id === getEffectiveOwnerId(carpool));
+    if (owner) {
+      await sendNotice(
+        owner.email,
+        `${member.name} wants to join ${carpool.name}`,
+        [`Hi ${owner.name},`, `${member.name} used the join code to ask to join "${carpool.name}". Open the carpool's Settings tab to approve or decline them.`],
+        `${siteUrl(req)}/dashboard.html?code=${encodeURIComponent(carpool.code)}&tab=settings`
+      );
     }
-    const emailSent = await sendCarpoolSummary(member.email, carpool, member, siteUrl(req), {
-      schedule: getScheduleResult(carpool).schedule,
-      members: normalizeMembers(carpool.members),
-    });
-    res.status(201).json({ member: normalizeMembers([member])[0], emailSent });
+    await notify.joinRequested(carpool, member);
+    res.status(202).json({ pending: true });
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
   }
@@ -269,11 +299,13 @@ app.post('/api/carpools/:code/join-requests/:memberId/:decision', requireUser, r
           schedule: getScheduleResult(carpool).schedule,
           members: normalizeMembers(carpool.members),
         });
+        await notify.joinApproved(carpool, member);
       }
       return res.json(serializeCarpool(carpool, req.member));
     }
     if (decision === 'decline') {
-      const { carpool } = await store.declineJoinRequest(req.params.code, memberId);
+      const { carpool, request } = await store.declineJoinRequest(req.params.code, memberId);
+      if (request) await notify.joinDeclined(carpool, request);
       return res.json(serializeCarpool(carpool, req.member));
     }
     res.status(404).json({ errors: ['Unknown decision'] });
@@ -289,6 +321,7 @@ app.delete('/api/carpools/:code/members/:memberId', requireUser, requireMember, 
     }
 
     const updated = await store.removeMember(req.params.code, req.params.memberId);
+    await notify.memberLeft(req.carpool, updated, req.member);
     if (!updated) return res.json({ deleted: true });
     res.json(serializeCarpool(updated, null));
   } catch (err) {
@@ -391,6 +424,7 @@ app.put('/api/carpools/:code/activity-dates', requireUser, requireMember, async 
     if (errors.length) return res.status(400).json({ errors });
 
     const updated = await store.setActivityDates(req.params.code, dates, times || {}, recurrence);
+    await notify.datesChanged(req.carpool, updated, req.member);
     res.json(serializeCarpool(updated, req.member));
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
@@ -417,7 +451,8 @@ app.put('/api/carpools/:code/dates/:date/child-exclusion', requireUser, requireM
 
 // The requester's own changes to one ride: { unavailable: true } for "I can't
 // make it" (false undoes it), { volunteer: true } for "I'll drive it" (false
-// withdraws). Anyone newly put on a locked (coming-week) ride is emailed.
+// withdraws). On a locked (coming-week) ride, anyone newly put on it is
+// emailed and notified, and anyone taken off it is notified.
 app.put('/api/carpools/:code/dates/:date/rides/:leg', requireUser, requireMember, async (req, res) => {
   try {
     const { date, leg } = req.params;
@@ -436,8 +471,16 @@ app.put('/api/carpools/:code/dates/:date/rides/:leg', requireUser, requireMember
     };
     const before = legDrivers(req.carpool).ids;
     const updated = await store.setRideOverride(req.params.code, date, leg, req.member.id, change);
-    const { entry } = legDrivers(updated);
+    const { entry, ids: after } = legDrivers(updated);
     if (entry && entry.locked) {
+      await notify.rideChanged(
+        updated,
+        date,
+        leg,
+        req.member,
+        after.filter((id) => !before.includes(id)),
+        before.filter((id) => !after.includes(id))
+      );
       const ride = `${leg === 'there' ? 'drop off' : 'pick up'} on ${formatDate(date)}`;
       const added = entry[leg].drivers.filter((d) => !before.includes(d.id) && d.id !== req.member.id);
       for (const { id } of added) {
@@ -474,10 +517,11 @@ app.patch('/api/carpools/:code/details', requireUser, requireMember, async (req,
       if (!details[key]) errors.push(`${label} is required`);
     });
     if (req.body.monthlyEmail !== undefined) details.monthlyEmail = Boolean(req.body.monthlyEmail);
-    if (req.body.requireApproval !== undefined) details.requireApproval = Boolean(req.body.requireApproval);
+    if (req.body.activityLocationVerified !== undefined) details.activityLocationVerified = req.body.activityLocationVerified === true;
     if (errors.length) return res.status(400).json({ errors });
 
     const updated = await store.updateCarpoolDetails(req.params.code, details);
+    await notify.detailsChanged(req.carpool, updated, req.member);
     res.json(serializeCarpool(updated, req.member));
   } catch (err) {
     res.status(err.status || 500).json({ errors: [err.message] });
@@ -489,7 +533,11 @@ app.patch('/api/carpools/:code/details', requireUser, requireMember, async (req,
 app.put('/api/carpools/:code/members/:memberId/addresses', requireUser, requireMember, async (req, res) => {
   const raw = Array.isArray(req.body.addresses) ? req.body.addresses : [];
   const addresses = raw
-    .map((a) => ({ id: a && typeof a.id === 'string' ? a.id : null, address: String((a && a.address) || '').trim() }))
+    .map((a) => ({
+      id: a && typeof a.id === 'string' ? a.id : null,
+      address: String((a && a.address) || '').trim(),
+      verified: Boolean(a && a.verified === true),
+    }))
     .filter((a) => a.address)
     .slice(0, MAX_ADDRESSES);
   if (addresses.length !== Math.min(raw.length, MAX_ADDRESSES)) {
@@ -590,6 +638,49 @@ app.post('/api/unsubscribe', async (req, res) => {
     );
   } catch (err) {
     res.status(err.status || 500).send(unsubscribePage("Couldn't update your email settings", escapeHtml(err.message)));
+  }
+});
+
+// ---- Calendar subscription (the dashboard's Export tab) ----
+// Calendar apps can't sign in, so the feed is at a private link holding a
+// secret per-member token. Asking for the link makes the token if needed;
+// resetting replaces it (old subscriptions stop updating).
+
+function calendarFeedUrl(req, code, memberId, token) {
+  return `${siteUrl(req)}/api/calendar/${encodeURIComponent(code)}/${encodeURIComponent(memberId)}/${token}.ics`;
+}
+
+app.get('/api/carpools/:code/calendar', requireUser, requireMember, async (req, res) => {
+  try {
+    const token = await store.getCalendarToken(req.params.code, req.member.id);
+    res.json({ url: calendarFeedUrl(req, req.carpool.code, req.member.id, token) });
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
+});
+
+app.post('/api/carpools/:code/calendar/reset', requireUser, requireMember, async (req, res) => {
+  try {
+    const token = await store.getCalendarToken(req.params.code, req.member.id, { reset: true });
+    res.json({ url: calendarFeedUrl(req, req.carpool.code, req.member.id, token) });
+  } catch (err) {
+    res.status(err.status || 500).json({ errors: [err.message] });
+  }
+});
+
+// The feed itself, for calendar apps (no sign-in; the token is the key).
+app.get('/api/calendar/:code/:memberId/:file', async (req, res) => {
+  try {
+    const token = String(req.params.file).replace(/\.ics$/, '');
+    const carpool = await store.getCarpool(req.params.code);
+    const member = carpool && carpool.members.find((m) => m.id === req.params.memberId);
+    if (!member || !store.tokensMatch(member.calendarToken, token)) {
+      return res.status(404).type('text/plain').send('This calendar link is invalid or has been reset.');
+    }
+    res.set('Cache-Control', 'no-store');
+    res.type('text/calendar; charset=utf-8').send(buildCalendar(carpool, member, siteUrl(req)));
+  } catch (err) {
+    res.status(err.status || 500).type('text/plain').send(err.message);
   }
 });
 

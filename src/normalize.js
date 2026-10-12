@@ -18,7 +18,7 @@ function getEffectiveOwnerId(carpool) {
 // unsubscribe tokens and Clerk user IDs are stripped: every member of the
 // carpool can read the payload.
 function normalizeMembers(members) {
-  return members.map(({ email, unsubscribeToken, userId, ...m }) => ({
+  return members.map(({ email, unsubscribeToken, calendarToken, userId, ...m }) => ({
     ...m,
     addresses: m.addresses || (m.address ? [{ id: 'a_legacy', address: m.address }] : []),
     rideAddresses: m.rideAddresses || { there: {}, back: {} },

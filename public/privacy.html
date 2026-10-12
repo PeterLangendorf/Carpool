@@ -48,6 +48,7 @@
     <ul>
       <li>To build a fair driving schedule for your carpool and show each driver their pickups, drop-offs and route.</li>
       <li>To send you emails about your carpool: a welcome summary when you create or join one, updates the carpool's organizer chooses to send, a monthly schedule if the organizer turns that on, a note to the organizer when someone asks to join, and a note when a ride in the coming week is handed to you.</li>
+      <li>To show you notifications in the app about your carpools, such as join requests, people joining or leaving, schedule changes and rides handed to you. We keep your 50 most recent.</li>
       <li>To sign you in, keep your account secure, and make sure only members can see a carpool's details.</li>
       <li>To keep the website running, fix problems and prevent abuse.</li>
     </ul>
@@ -57,7 +58,7 @@
     <ul>
       <li><strong>Members of your carpool</strong> can see members' names, pickup and drop-off addresses, riders' names, availability and the schedule. Drivers need these to do the pickups.</li>
       <li><strong>Email addresses are not shown</strong> to other members.</li>
-      <li><strong>If a carpool requires approval</strong>, its organizer sees your name and your riders' names when you ask to join, before you're let in. If they decline, your request is deleted.</li>
+      <li><strong>When you ask to join a carpool</strong>, its organizer sees your name and your riders' names before deciding whether to let you in. If they decline, your request is deleted.</li>
       <li><strong>Anyone who isn't a member</strong> can't see anything about a carpool's members, even with its join code. To join, a person must sign in, and the join screen only shows the carpool's name, activity and dates.</li>
       <li>Carpool emails include the recipient's own drives and the pickup addresses on their route.</li>
     </ul>
@@ -69,7 +70,9 @@
       <li><strong>Google</strong>: only if you choose “Continue with Google” to sign in.</li>
       <li><strong>Netlify</strong>: hosts the website and stores carpool information.</li>
       <li><strong>Resend</strong>: delivers our emails (your email address and the email's contents).</li>
-      <li><strong>Apple Maps</strong>: addresses link to Apple Maps for directions. Apple receives an address only when you tap one of those links.</li>
+      <li><strong>Apple Maps or Google Maps</strong>: addresses link to the maps app you choose for directions. Apple or Google receives an address only when you tap one of those links.</li>
+      <li><strong>Your calendar app</strong>: if you add your carpool to a calendar (such as Apple Calendar or Google Calendar), that service fetches your upcoming rides, with their riders and addresses, from a private link. Anyone with that link can see them, so you can reset it at any time from the Export tab.</li>
+      <li><strong>Mapbox</strong>: suggests matching addresses as you type one in. Our server sends Mapbox what you type in address boxes, and your approximate area (worked out by our host from your IP address) so nearby addresses come first. We save only the address you enter, not anything else from Mapbox.</li>
     </ul>
     <p>We may also disclose information if required by law, or to protect the safety of our users or others.</p>
 

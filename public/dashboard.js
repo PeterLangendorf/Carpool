@@ -231,6 +231,7 @@ function showTab(name) {
     tab.classList.toggle('active', on);
     tab.setAttribute('aria-selected', String(on));
   });
+  if (name === 'export') renderExport();
   document.querySelectorAll('.tab-panel').forEach((panel) => {
     const on = panel.dataset.panel === name;
     panel.classList.toggle('hidden', !on);
@@ -502,9 +503,46 @@ function rideAddressFor(member, leg, weekday) {
   return match ? match.address : null;
 }
 
+// ---- Maps app: which app addresses and routes open in (Export tab) ----
+// Saved per device, since it depends on what's installed there.
+const MAPS_APP_KEY = 'carpooler.mapsApp';
+
+function mapsApp() {
+  try {
+    return localStorage.getItem(MAPS_APP_KEY) === 'google' ? 'google' : 'apple';
+  } catch {
+    return 'apple';
+  }
+}
+
+function setMapsApp(app) {
+  try {
+    localStorage.setItem(MAPS_APP_KEY, app);
+  } catch {
+    // Private browsing: it lasts until the page is closed.
+  }
+}
+
+function mapsUrl(address, app = mapsApp()) {
+  return app === 'google'
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`
+    : `https://maps.apple.com/?address=${encodeURIComponent(address)}`;
+}
+
+// Driving directions through `addresses` in order, from wherever you are.
+// Google Maps takes the stops in between as waypoints. Apple Maps links can
+// only hold one stop, so its directions go to the first.
+function routeUrl(addresses, app = mapsApp()) {
+  if (app === 'google') {
+    const params = new URLSearchParams({ api: '1', travelmode: 'driving', destination: addresses[addresses.length - 1] });
+    if (addresses.length > 1) params.set('waypoints', addresses.slice(0, -1).join('|'));
+    return `https://www.google.com/maps/dir/?${params}`;
+  }
+  return `https://maps.apple.com/?daddr=${encodeURIComponent(addresses[0])}&dirflg=d`;
+}
+
 function mapsLink(address, text) {
-  const url = `https://maps.apple.com/?address=${encodeURIComponent(address)}`;
-  return `<a href="${url}" target="_blank" rel="noopener">${escapeHtml(text || address)}</a>`;
+  return `<a href="${mapsUrl(address)}" target="_blank" rel="noopener">${escapeHtml(text || address)}</a>`;
 }
 
 function activityStopHtml(title, note) {
@@ -518,13 +556,10 @@ function activityStopHtml(title, note) {
   `;
 }
 
-// Lists the stops in the order they're added, with an Apple Maps link for
-// each — it doesn't reorder them into an optimized route.
-function openRouteOverlay(entry, leg) {
+// The riders' stops on one of your drives, in the order they're added (not
+// optimized): [{ address, parentName, kids }], one per family and address.
+function riderStops(entry, leg) {
   const legData = leg === 'there' ? entry.there : entry.back;
-  const legLabel = leg === 'there' ? 'Drop off' : 'Pick up';
-  document.getElementById('routeDateLabel').textContent = `${legLabel} · ${FULL_DAY_LABELS[entry.weekday]}, ${formatDateShort(entry.date)}`;
-
   const me = carpool.members.find((m) => m.id === identity.id);
   const myAddressCount = me && me.addresses ? me.addresses.length : 0;
 
@@ -540,6 +575,37 @@ function openRouteOverlay(entry, leg) {
     if (!stops.has(key)) stops.set(key, { address, parentName: c.parentId === identity.id ? 'yours' : `${c.parentName}'s`, kids: [] });
     stops.get(key).kids.push(c.name);
   });
+  return [...stops.values()];
+}
+
+// Every address on one of your drives, in driving order: the riders' stops
+// then the activity (drop off), or the activity first (pick up).
+function routeAddresses(entry, leg) {
+  const riders = riderStops(entry, leg)
+    .map((s) => s.address)
+    .filter(Boolean);
+  const activity = carpool.activityLocation ? [carpool.activityLocation] : [];
+  return leg === 'there' ? [...riders, ...activity] : [...activity, ...riders];
+}
+
+// Lists the stops with a map link for each, plus directions for the whole
+// route (or its first stop, in Apple Maps) in the chosen maps app.
+function openRouteOverlay(entry, leg) {
+  const legLabel = leg === 'there' ? 'Drop off' : 'Pick up';
+  document.getElementById('routeDateLabel').textContent = `${legLabel} · ${FULL_DAY_LABELS[entry.weekday]}, ${formatDateShort(entry.date)}`;
+  const stops = riderStops(entry, leg);
+
+  const directions = document.getElementById('routeDirectionsBtn');
+  const directionsNote = document.getElementById('routeDirectionsNote');
+  const addresses = routeAddresses(entry, leg);
+  const app = mapsApp();
+  directions.classList.toggle('hidden', !addresses.length);
+  directionsNote.classList.toggle('hidden', !addresses.length || app !== 'apple' || addresses.length < 2);
+  if (addresses.length) {
+    directions.href = routeUrl(addresses, app);
+    directions.textContent = app === 'google' ? 'Directions for the whole route in Google Maps' : 'Directions to the first stop in Apple Maps';
+    directionsNote.textContent = 'Apple Maps links can only hold one stop, so tap each address above in turn. You can choose Google Maps instead in the Export tab.';
+  }
 
   const container = document.getElementById('routeStops');
   container.innerHTML = '';
@@ -548,7 +614,7 @@ function openRouteOverlay(entry, leg) {
   // up ride starts there instead.
   if (leg === 'back') container.innerHTML += activityStopHtml('First stop', 'pick up all riders here.');
 
-  if (stops.size === 0) {
+  if (stops.length === 0) {
     container.innerHTML += '<p class="subtitle">No other stops — just your own riders today!</p>';
   } else {
     stops.forEach(({ address, parentName, kids }) => {
@@ -634,8 +700,22 @@ function renderLeg(entry, legData, time, label) {
 // Sends one of the ride buttons' choices and redraws with the new schedule.
 async function changeRide(entry, legKey, action) {
   const ride = `${legKey === 'there' ? 'drop off' : 'pick up'} on ${FULL_DAY_LABELS[entry.weekday]}, ${formatDateShort(entry.date)}`;
-  if (action === 'unavailable' && !window.confirm(`Can't make the ${ride}? Someone else will be picked to drive it.`)) return;
-  if (action === 'volunteer' && !window.confirm(`Drive the ${ride}?`)) return;
+  if (
+    action === 'unavailable' &&
+    !(await Dialog.confirm({
+      title: "Can't make it?",
+      message: `Someone else will be picked to drive the ${ride}.`,
+      confirmText: "I can't make it",
+    }))
+  ) {
+    return;
+  }
+  if (
+    action === 'volunteer' &&
+    !(await Dialog.confirm({ title: 'Drive this ride?', message: `You'll drive the ${ride}.`, confirmText: "I'll drive it" }))
+  ) {
+    return;
+  }
   const body = {
     unavailable: { unavailable: true },
     available: { unavailable: false },
@@ -739,7 +819,12 @@ function renderMembers() {
     const isMe = m.id === identity.id;
     const childCount = (m.children || []).length;
     const drives = scheduleData.driveCounts[m.id] || 0;
-    const meta = [isOwnerRow ? 'Organizer' : null, `${childCount} ${childCount === 1 ? 'rider' : 'riders'}`, `${m.seats} ${m.seats === 1 ? 'seat' : 'seats'}`]
+    const isDriver = m.seats > 0 && ((m.canDriveThereDays || []).length || (m.canDriveBackDays || []).length);
+    const meta = [
+      isOwnerRow ? 'Organizer' : null,
+      childCount ? `${childCount} ${childCount === 1 ? 'rider' : 'riders'}` : 'No riders',
+      isDriver ? `${m.seats} ${m.seats === 1 ? 'seat' : 'seats'}` : 'Not driving',
+    ]
       .filter(Boolean)
       .join(' · ');
 
@@ -836,7 +921,13 @@ async function saveMyChild(childId, row, originalFirstName) {
 }
 
 async function removeMyChild(childId, name) {
-  if (!window.confirm(`Remove ${name} from this carpool?`)) return;
+  const confirmed = await Dialog.confirm({
+    title: `Remove ${name}?`,
+    message: "They won't get rides in this carpool anymore.",
+    confirmText: 'Remove',
+    danger: true,
+  });
+  if (!confirmed) return;
   const errorEl = document.getElementById('myChildrenError');
   showError(errorEl, '');
   try {
@@ -854,8 +945,8 @@ async function removeMyChild(childId, name) {
 }
 
 document.getElementById('addMyChildBtn').addEventListener('click', async () => {
-  const firstName = window.prompt("New rider's first name?");
-  if (!firstName || !firstName.trim()) return;
+  const firstName = await Dialog.prompt({ title: 'Add a rider', label: "Rider's first name", confirmText: 'Add rider' });
+  if (!firstName) return;
   const errorEl = document.getElementById('myChildrenError');
   showError(errorEl, '');
   try {
@@ -886,7 +977,144 @@ function closeMyChildrenOverlay() {
 
 document.getElementById('closeMyChildren').addEventListener('click', closeMyChildrenOverlay);
 
-// ---- Organizer: people waiting to join, and whether joining needs approval ----
+// ---- Export tab: calendar subscription, maps app, printing ----
+
+let calendarUrl = null;
+
+function showCalendarLinks(url) {
+  calendarUrl = url;
+  const webcal = url.replace(/^https?:/, 'webcal:');
+  document.getElementById('appleCalendarLink').href = webcal;
+  document.getElementById('googleCalendarLink').href = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`;
+}
+
+async function loadCalendarLink() {
+  const errorEl = document.getElementById('calendarError');
+  try {
+    const { url } = await api(`/api/carpools/${encodeURIComponent(code)}/calendar`);
+    showCalendarLinks(url);
+    showError(errorEl, '');
+  } catch (err) {
+    showError(errorEl, err.message);
+  }
+}
+
+// Your next drive, with a button for each maps app.
+function renderNextDriveMaps() {
+  const el = document.getElementById('nextDriveMaps');
+  let next = null;
+  scheduleData.schedule.some((entry) =>
+    ['there', 'back'].some((leg) => {
+      if (entry[leg].drivers.some((d) => d.id === identity.id) && routeAddresses(entry, leg).length) next = { entry, leg };
+      return next;
+    })
+  );
+  if (!next) {
+    el.innerHTML = '';
+    return;
+  }
+  const { entry, leg } = next;
+  const addresses = routeAddresses(entry, leg);
+  el.innerHTML = `
+    <div class="next-drive">
+      <strong>Your next drive</strong>
+      <span class="member-row-meta">${leg === 'there' ? 'Drop off' : 'Pick up'} · ${FULL_DAY_LABELS[entry.weekday]}, ${escapeHtml(formatDateShort(entry.date))} · ${addresses.length} ${addresses.length === 1 ? 'stop' : 'stops'}</span>
+      <div class="export-actions">
+        <a class="btn secondary" href="${routeUrl(addresses, 'apple')}" target="_blank" rel="noopener">Open in Apple Maps</a>
+        <a class="btn secondary" href="${routeUrl(addresses, 'google')}" target="_blank" rel="noopener">Open in Google Maps</a>
+      </div>
+    </div>`;
+}
+
+function renderExport() {
+  if (!calendarUrl) loadCalendarLink();
+  document.querySelectorAll('input[name="mapsApp"]').forEach((input) => {
+    input.checked = input.value === mapsApp();
+  });
+  renderNextDriveMaps();
+}
+
+document.querySelectorAll('input[name="mapsApp"]').forEach((input) => {
+  input.addEventListener('change', () => {
+    if (input.checked) setMapsApp(input.value);
+  });
+});
+
+// Before the link has loaded there's nowhere to go.
+['appleCalendarLink', 'googleCalendarLink'].forEach((id) => {
+  document.getElementById(id).addEventListener('click', (e) => {
+    if (!calendarUrl) e.preventDefault();
+  });
+});
+
+document.getElementById('copyCalendarLink').addEventListener('click', async (e) => {
+  if (!calendarUrl) return;
+  if (await copyTextToClipboard(calendarUrl)) flashCopiedFeedback(e.currentTarget, 'Copy link for other apps');
+});
+
+document.getElementById('resetCalendarLink').addEventListener('click', async () => {
+  const confirmed = await Dialog.confirm({
+    title: 'Reset your calendar link?',
+    message: "Calendars using the old link will stop updating, so you'll need to add the new one again.",
+    confirmText: 'Reset link',
+    danger: true,
+  });
+  if (!confirmed) return;
+  const errorEl = document.getElementById('calendarError');
+  try {
+    const { url } = await api(`/api/carpools/${encodeURIComponent(code)}/calendar/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    showCalendarLinks(url);
+    showError(errorEl, '');
+  } catch (err) {
+    showError(errorEl, err.message);
+  }
+});
+
+// One printed cell: a ride's time, driver(s) and riders.
+function printRideHtml(ride, time) {
+  if (!ride.children.length) return '<span class="print-muted">No ride</span>';
+  const driver = ride.noDriverAvailable ? '<strong>No driver yet</strong>' : `<strong>${escapeHtml(ride.drivers.map((d) => d.name).join(' & '))}</strong>`;
+  return `${time ? `${escapeHtml(formatTimeShort(time))}<br>` : ''}${driver}<br><span class="print-muted">${escapeHtml(ride.children.map((c) => c.name).join(', '))}</span>`;
+}
+
+// Fills the print-only copy of the schedule (#printView) and prints it.
+document.getElementById('printBtn').addEventListener('click', () => {
+  const days = Number(document.getElementById('printRange').value);
+  const mineOnly = document.getElementById('printMineOnly').checked;
+  const until = new Date();
+  until.setDate(until.getDate() + days);
+  const untilKey = toDateKey(until);
+  const involvesMe = (ride) => ride.drivers.some((d) => d.id === identity.id) || ride.children.some((c) => c.parentId === identity.id);
+  const entries = scheduleData.schedule.filter(
+    (e) => e.date < untilKey && (e.there.children.length || e.back.children.length) && (!mineOnly || involvesMe(e.there) || involvesMe(e.back))
+  );
+
+  const rows = entries
+    .map(
+      (e) => `<tr>
+        <td><strong>${FULL_DAY_LABELS[e.weekday]}</strong><br>${escapeHtml(formatDateShort(e.date))}</td>
+        <td>${!mineOnly || involvesMe(e.there) ? printRideHtml(e.there, e.thereTime) : '<span class="print-muted">—</span>'}</td>
+        <td>${!mineOnly || involvesMe(e.back) ? printRideHtml(e.back, e.backTime) : '<span class="print-muted">—</span>'}</td>
+      </tr>`
+    )
+    .join('');
+  const place = [carpool.activityName, carpool.activityLocation].filter(Boolean).join(' · ');
+  document.getElementById('printView').innerHTML = `
+    <h1>${escapeHtml(carpool.name)}</h1>
+    <p>${escapeHtml(place)}${place ? ' · ' : ''}${mineOnly ? `${escapeHtml(identity.name)}'s rides` : 'Everyone'} · printed ${escapeHtml(new Date().toLocaleDateString())}</p>
+    ${
+      rows
+        ? `<table><thead><tr><th>Date</th><th>Drop off</th><th>Pick up</th></tr></thead><tbody>${rows}</tbody></table>`
+        : '<p>No rides in these dates.</p>'
+    }`;
+  window.print();
+});
+
+// ---- Organizer: people waiting to join (everyone has to be approved) ----
 
 function renderJoinRequests() {
   const isOrganizer = identity.id === carpool.ownerId;
@@ -895,7 +1123,6 @@ function renderJoinRequests() {
   const badge = document.getElementById('settingsBadge');
   badge.textContent = String(requests.length);
   badge.classList.toggle('hidden', requests.length === 0);
-  document.getElementById('requireApprovalToggle').checked = Boolean(carpool.requireApproval);
 
   const list = document.getElementById('joinRequestsList');
   list.innerHTML = '';
@@ -917,7 +1144,17 @@ function renderJoinRequests() {
 }
 
 async function answerJoinRequest(request, decision) {
-  if (decision === 'decline' && !window.confirm(`Decline ${request.name}'s request to join?`)) return;
+  if (
+    decision === 'decline' &&
+    !(await Dialog.confirm({
+      title: `Decline ${request.name}?`,
+      message: "Their request to join will be removed, and they'll be told it wasn't approved.",
+      confirmText: 'Decline',
+      danger: true,
+    }))
+  ) {
+    return;
+  }
   const errorEl = document.getElementById('joinRequestsError');
   showError(errorEl, '');
   try {
@@ -932,21 +1169,6 @@ async function answerJoinRequest(request, decision) {
     showError(errorEl, err.message);
   }
 }
-
-document.getElementById('requireApprovalToggle').addEventListener('change', async (e) => {
-  const errorEl = document.getElementById('requireApprovalError');
-  showError(errorEl, '');
-  try {
-    carpool = await api(`/api/carpools/${encodeURIComponent(code)}/details`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requireApproval: e.target.checked }),
-    });
-  } catch (err) {
-    e.target.checked = !e.target.checked;
-    showError(errorEl, err.message);
-  }
-});
 
 function renderAll() {
   document.getElementById('carpoolName').textContent = carpool.name;
@@ -1053,6 +1275,9 @@ async function loadAll() {
     }
     identity = carpool.me;
     renderAll();
+    // Notifications link straight to a tab (e.g. join requests in Settings).
+    const tab = params.get('tab');
+    if (['schedule', 'people', 'export', 'settings'].includes(tab)) showTab(tab);
     if (!findMe()) {
       if (await waitForMyMembership()) renderAll();
       else showMemberNotFound();
@@ -1260,7 +1485,7 @@ document.getElementById('saveDatesBtn').addEventListener('click', async () => {
 // Working copy while the overlay is open: rides point at address rows by
 // index (the same shape the API takes), so adding/removing rows only has to
 // shift those indexes.
-let addressDraft = []; // [{ id, address }]
+let addressDraft = []; // [{ id, address, verified }]
 let rideAddressDraft = { there: {}, back: {} }; // leg -> weekday -> index into addressDraft
 
 function myRides() {
@@ -1312,8 +1537,11 @@ function renderMyAddresses() {
     `;
     const input = row.querySelector('input');
     input.value = a.address;
+    AddressAutocomplete.attach(input);
+    AddressAutocomplete.setVerified(input, Boolean(a.verified));
     input.addEventListener('input', () => {
       a.address = input.value;
+      a.verified = AddressAutocomplete.isVerified(input);
     });
     input.addEventListener('change', renderMyRideAddresses);
     row.querySelector('.remove-child-btn').addEventListener('click', () => removeDraftAddress(i));
@@ -1337,7 +1565,7 @@ function removeDraftAddress(index) {
 
 function openMyAddressesOverlay() {
   const me = carpool.members.find((m) => m.id === identity.id);
-  addressDraft = (me.addresses || []).map((a) => ({ id: a.id, address: a.address }));
+  addressDraft = (me.addresses || []).map((a) => ({ id: a.id, address: a.address, verified: Boolean(a.verified) }));
   if (!addressDraft.length) addressDraft.push({ id: null, address: '' });
   rideAddressDraft = { there: {}, back: {} };
   ['there', 'back'].forEach((leg) => {
@@ -1370,13 +1598,23 @@ document.getElementById('saveMyAddressesBtn').addEventListener('click', async ()
   const errorEl = document.getElementById('myAddressesError');
   showError(errorEl, '');
 
+  // Ask about addresses not found on the map, but only new or changed ones.
+  const me = findMe();
+  const saved = new Map(((me && me.addresses) || []).map((a) => [a.id, a.address]));
+  const inputs = Array.from(document.querySelectorAll('#myAddressesList input'));
+  const changed = inputs.filter((input, i) => {
+    const draft = addressDraft[i];
+    return draft && (!draft.id || saved.get(draft.id) !== input.value.trim());
+  });
+  if (!(await AddressAutocomplete.confirmUnverified(changed))) return;
+
   // Drop blank rows, remapping ride indexes to the compacted list.
   const indexMap = new Map();
   const addresses = [];
   addressDraft.forEach((a, i) => {
     if (!a.address.trim()) return;
     indexMap.set(i, addresses.length);
-    addresses.push({ id: a.id, address: a.address.trim() });
+    addresses.push({ id: a.id, address: a.address.trim(), verified: Boolean(a.verified) });
   });
   const rideAddresses = { there: {}, back: {} };
   ['there', 'back'].forEach((leg) => {
@@ -1489,6 +1727,7 @@ function openDetailsOverlay() {
   document.getElementById('detailsCarpoolName').value = carpool.name || '';
   document.getElementById('detailsActivityName').value = carpool.activityName || '';
   document.getElementById('detailsActivityLocation').value = carpool.activityLocation || '';
+  AddressAutocomplete.setVerified(document.getElementById('detailsActivityLocation'), Boolean(carpool.activityLocationVerified));
   showError(document.getElementById('detailsError'), '');
   document.getElementById('detailsOverlay').classList.remove('hidden');
   lockBodyScroll();
@@ -1499,6 +1738,7 @@ function dismissDetailsOverlay() {
   unlockBodyScroll();
 }
 
+AddressAutocomplete.attach(document.getElementById('detailsActivityLocation'));
 document.getElementById('editDetailsBtn').addEventListener('click', openDetailsOverlay);
 document.getElementById('closeDetailsOverlay').addEventListener('click', dismissDetailsOverlay);
 
@@ -1508,6 +1748,8 @@ document.getElementById('saveDetailsBtn').addEventListener('click', async () => 
   const activityName = document.getElementById('detailsActivityName').value.trim();
   const activityLocation = document.getElementById('detailsActivityLocation').value.trim();
   if (!name || !activityName || !activityLocation) return showError(errorEl, 'Please fill in all three fields');
+  const locationInput = document.getElementById('detailsActivityLocation');
+  if (activityLocation !== (carpool.activityLocation || '') && !(await AddressAutocomplete.confirmUnverified([locationInput]))) return;
   showError(errorEl, '');
 
   const btn = document.getElementById('saveDetailsBtn');
@@ -1516,7 +1758,12 @@ document.getElementById('saveDetailsBtn').addEventListener('click', async () => 
     carpool = await api(`/api/carpools/${encodeURIComponent(code)}/details`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, activityName, activityLocation }),
+      body: JSON.stringify({
+        name,
+        activityName,
+        activityLocation,
+        activityLocationVerified: AddressAutocomplete.isVerified(document.getElementById('detailsActivityLocation')),
+      }),
     });
     dismissDetailsOverlay();
     renderAll();

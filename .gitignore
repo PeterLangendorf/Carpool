@@ -2,3 +2,14 @@ node_modules/
 .netlify/
 .env
 local-db.json
+
+# Claude Code settings: personal permissions, and hooks that point at this
+# machine's graphify install.
+.claude/settings.local.json
+.claude/settings.json
+
+# graphify: only the graph and its report are shared (see CLAUDE.md); the
+# cache, run snapshots and local interpreter path stay on this machine.
+graphify-out/*
+!graphify-out/graph.json
+!graphify-out/GRAPH_REPORT.md

@@ -3,6 +3,7 @@
 // scripts from the instance's Frontend API. Pages don't sign people in
 // themselves: they send them to /sign-in (sign-in.html) with a redirect_url to
 // come back to, only at the point an account is actually needed.
+/* exported auth */
 const auth = (() => {
   function loadScript(src, attrs = {}) {
     return new Promise((resolve, reject) => {
@@ -81,9 +82,15 @@ const auth = (() => {
     return (await currentUser()) || redirectToSignIn(returnTo, reason);
   }
 
-  // fetch() with the signed-in user's session token attached.
+  // fetch() with the signed-in user's session token attached, plus their time
+  // zone, which a carpool adopts if it doesn't have one yet (see src/dates.js).
   async function authFetch(path, options = {}) {
     const headers = { ...(options.headers || {}) };
+    try {
+      headers['X-Time-Zone'] = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      // No time zone available: the server falls back to UTC.
+    }
     try {
       const clerk = await ready;
       const token = clerk.session ? await clerk.session.getToken() : null;

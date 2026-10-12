@@ -102,18 +102,8 @@ function getLegDaySelection(container) {
   return { thereDays, backDays, thereAddresses: addressesFor('there', thereDays), backAddresses: addressesFor('back', backDays) };
 }
 
-// Mirrors src/store.js's resolveActivityTimes: most-specific override wins
-// (exact date, then weekday, then the uniform time for everything).
-function resolveTimes(activityTimes, date, weekday) {
-  const times = activityTimes || {};
-  const perDate = (times.perDate && times.perDate[date]) || {};
-  const perWeekday = (times.perWeekday && times.perWeekday[weekday]) || {};
-  const uniform = times.uniform || {};
-  return {
-    there: perDate.there || perWeekday.there || uniform.there || null,
-    back: perDate.back || perWeekday.back || uniform.back || null,
-  };
-}
+// Most-specific override wins (see /activity-times.js, shared with the server).
+const resolveTimes = ActivityTimes.resolveActivityTimes;
 
 function toDateKey(d) {
   const y = d.getFullYear();
@@ -481,6 +471,7 @@ document.getElementById('goCreateBtn').addEventListener('click', () => showScree
 
 // ---- Join flow: step 1 (code) ----
 let joinedCode = null;
+let joinedCarpoolName = '';
 let joinedActivityDates = [];
 let joinedActivityTimes = { uniform: {}, perWeekday: {}, perDate: {} };
 let joinedActiveWeekdays = [];
@@ -502,7 +493,9 @@ async function lookUpCarpool(rawCode) {
   try {
     const carpool = await api(`/api/carpools/${encodeURIComponent(rawCode)}/preview`);
     if (carpool.isMember) return goToDashboard(carpool.code);
+    if (carpool.isPending) return showJoinPending(carpool.name);
     joinedCode = carpool.code;
+    joinedCarpoolName = carpool.name;
     joinedActivityDates = carpool.activityDates || [];
     joinedActivityTimes = carpool.activityTimes || { uniform: {}, perWeekday: {}, perDate: {} };
     const weekdaySet = new Set(joinedActivityDates.map((d) => new Date(d + 'T00:00:00').getDay()));
@@ -518,6 +511,13 @@ async function lookUpCarpool(rawCode) {
   } finally {
     submitBtn.disabled = false;
   }
+}
+
+// Carpools that require approval: the request waits for the organizer.
+function showJoinPending(carpoolName) {
+  document.getElementById('joinPendingText').textContent =
+    `You've asked to join ${carpoolName}. The organizer needs to approve you before you can see the carpool.`;
+  showScreen('join-pending');
 }
 
 // Joining is where an account is needed: signed-out people sign in first and
@@ -686,6 +686,10 @@ document.querySelector('[data-step-form="join-new-candrive"]').addEventListener(
         children,
       }),
     });
+    if (data.pending) {
+      submitBtn.disabled = false;
+      return showJoinPending(joinedCarpoolName);
+    }
     goToDashboard(joinedCode);
   } catch (err) {
     submitBtn.disabled = false;
@@ -1191,7 +1195,9 @@ function saveCreateDraft() {
 function clearCreateDraft() {
   try {
     localStorage.removeItem(CREATE_DRAFT_KEY);
-  } catch {}
+  } catch {
+    // Storage unavailable: nothing to clear.
+  }
 }
 
 // Puts a saved draft back into `wizard` and the create screens' inputs (so
@@ -1200,7 +1206,9 @@ function restoreCreateDraft() {
   let draft = null;
   try {
     draft = JSON.parse(localStorage.getItem(CREATE_DRAFT_KEY));
-  } catch {}
+  } catch {
+    // Storage unavailable or the draft is unreadable: start fresh.
+  }
   if (!draft || !draft.wizard || Date.now() - draft.savedAt > CREATE_DRAFT_MAX_AGE_MS) return false;
   Object.assign(wizard, draft.wizard);
 

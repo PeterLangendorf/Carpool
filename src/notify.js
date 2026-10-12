@@ -3,6 +3,7 @@
 const store = require('./store');
 const { buildEmail, sendEmails, isEmailConfigured } = require('./email');
 const { getEffectiveOwnerId, normalizeMembers, getScheduleResult } = require('./normalize');
+const { todayKey } = require('./dates');
 
 function recipients(carpool) {
   return carpool.members.filter((m) => m.email && !m.emailOptOut);
@@ -38,11 +39,11 @@ async function sendUpdateEmail(code, siteUrl, message) {
 // Skips carpools with nothing scheduled this month.
 async function sendMonthlyEmails(siteUrl) {
   if (!isEmailConfigured()) return { carpools: 0, sent: 0, note: 'email not configured' };
-  const monthKey = new Date().toISOString().slice(0, 7);
   const carpools = await store.prepareCarpoolsForEmail({ monthlyOnly: true });
   let emailed = 0;
   let sent = 0;
   for (const carpool of carpools) {
+    const monthKey = todayKey(carpool.timeZone).slice(0, 7);
     if (!(carpool.activityDates || []).some((d) => d.startsWith(monthKey))) continue;
     const result = await emailCarpool(carpool, siteUrl, { kind: 'monthly' });
     emailed++;

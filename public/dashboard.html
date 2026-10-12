@@ -28,7 +28,7 @@
   <nav class="tabs" role="tablist" aria-label="Carpool sections">
     <button type="button" role="tab" class="tab active" data-tab="schedule" aria-selected="true">Schedule</button>
     <button type="button" role="tab" class="tab" data-tab="people" aria-selected="false">People</button>
-    <button type="button" role="tab" class="tab" data-tab="settings" aria-selected="false">Settings</button>
+    <button type="button" role="tab" class="tab" data-tab="settings" aria-selected="false">Settings<span class="tab-badge hidden" id="settingsBadge"></span></button>
   </nav>
 
   <p class="error hidden" id="loadError"></p>
@@ -86,6 +86,11 @@
 
   <!-- SETTINGS -->
   <section class="tab-panel hidden" data-panel="settings">
+    <div class="hidden" id="joinRequestsSection">
+      <h2 class="section-title">Waiting to join</h2>
+      <div class="card" id="joinRequestsList"></div>
+      <p class="error hidden" id="joinRequestsError"></p>
+    </div>
     <div class="hidden" id="organizerMenu">
       <h2 class="section-title">Organizer</h2>
       <div class="menu-group">
@@ -99,6 +104,11 @@
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.8 7l8.2 6.2L20.2 7"/></svg><span class="menu-label">Email everyone</span><svg class="icon menu-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
       </button>
       </div>
+      <label class="same-lastname-check" for="requireApprovalToggle">
+        <input type="checkbox" id="requireApprovalToggle" />
+        Approve people before they can join with the code
+      </label>
+      <p class="error hidden" id="requireApprovalError"></p>
     </div>
     <div>
       <h2 class="section-title">This carpool</h2>
@@ -263,6 +273,7 @@
 </div>
 
 <script src="/auth.js"></script>
+<script src="/activity-times.js"></script>
 <script src="/dashboard.js"></script>
 </body>
 </html>

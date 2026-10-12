@@ -97,18 +97,8 @@ function formatTimeShort(hhmm) {
   return `${h12}:${String(m).padStart(2, '0')}${period}`;
 }
 
-// Mirrors src/store.js's resolveActivityTimes: most-specific override wins
-// (exact date, then weekday, then the uniform time for everything).
-function resolveTimes(activityTimes, date, weekday) {
-  const times = activityTimes || {};
-  const perDate = (times.perDate && times.perDate[date]) || {};
-  const perWeekday = (times.perWeekday && times.perWeekday[weekday]) || {};
-  const uniform = times.uniform || {};
-  return {
-    there: perDate.there || perWeekday.there || uniform.there || null,
-    back: perDate.back || perWeekday.back || uniform.back || null,
-  };
-}
+// Most-specific override wins (see /activity-times.js, shared with the server).
+const resolveTimes = ActivityTimes.resolveActivityTimes;
 
 function initials(name) {
   return name
@@ -352,7 +342,7 @@ function legLine(leg) {
   if (!leg || leg.children.length === 0) return '<span class="cal-leg">&nbsp;</span>';
   if (leg.noDriverAvailable) return '<span class="cal-leg is-missing">None</span>';
   if (leg.drivers.some((d) => d.id === identity.id)) return '<span class="cal-leg is-me">You</span>';
-  return `<span class="cal-leg">${initials(leg.drivers[0].name)}${leg.drivers.length > 1 ? '+' : ''}</span>`;
+  return `<span class="cal-leg">${escapeHtml(initials(leg.drivers[0].name))}${leg.drivers.length > 1 ? '+' : ''}</span>`;
 }
 
 function renderMainCalendar() {
@@ -401,13 +391,13 @@ function renderChildrenSection(entry, isMine) {
     return '<div class="riders">No riders scheduled this ride.</div>';
   }
   if (!isMine) {
-    const list = entry.children.map((c) => `${c.name} (${c.parentName})`).join(', ');
+    const list = entry.children.map((c) => `${escapeHtml(c.name)} (${escapeHtml(c.parentName)})`).join(', ');
     return `<div class="riders">Riders going: ${list}</div>`;
   }
   const items = entry.children
     .map((c) => {
       const whose = c.parentId === identity.id ? 'yours' : c.parentName;
-      return `<li>${c.name} <span class="pickup-parent">(${whose})</span></li>`;
+      return `<li>${escapeHtml(c.name)} <span class="pickup-parent">(${escapeHtml(whose)})</span></li>`;
     })
     .join('');
   return `
@@ -428,7 +418,7 @@ function renderChildToggles(children, entry) {
       return `
         <label class="child-toggle-row">
           <input type="checkbox" class="child-toggle-input" data-child-id="${c.id}" data-original-attending="${attending}" ${attending ? 'checked' : ''} />
-          <span>${c.name} going this day</span>
+          <span>${escapeHtml(c.name)} going this day</span>
         </label>
       `;
     })
@@ -499,7 +489,8 @@ function escapeHtml(value) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // Which of a member's addresses a given ride uses: the one they picked for
@@ -586,6 +577,27 @@ function dismissRouteOverlay() {
 
 document.getElementById('closeRouteOverlay').addEventListener('click', dismissRouteOverlay);
 
+// Whether the signed-in member said they can't make a ride.
+function markedUnavailable(entry, legKey) {
+  const override = carpool.dateOverrides && carpool.dateOverrides[entry.date];
+  const list = override && override.unavailableDriverIds && override.unavailableDriverIds[legKey];
+  return Boolean(list && list.includes(identity.id));
+}
+
+// "Can't make it" on your own ride (someone else is then picked); "I'll drive
+// it" on anyone else's, or one with no driver; and undo for "can't make it".
+function rideActionsHtml(entry, legKey, isMine) {
+  const me = findMe();
+  if (!me) return '';
+  const button = (action, cls, text) =>
+    `<button type="button" class="${cls} ride-action-btn" data-ride-action="${action}" data-leg="${legKey}">${text}</button>`;
+  if (isMine) return button('unavailable', 'ghost', "Can't make it");
+  if (markedUnavailable(entry, legKey)) {
+    return `<div class="riders">You said you can't make this ride.</div>${button('available', 'ghost', 'I can make it after all')}`;
+  }
+  return me.seats > 0 ? button('volunteer', 'ghost', "I'll drive it") : '';
+}
+
 function renderLeg(entry, legData, time, label) {
   if (legData.children.length === 0) return '';
   const timeStr = time ? formatTimeShort(time) : '';
@@ -596,12 +608,13 @@ function renderLeg(entry, legData, time, label) {
       <div class="leg-block">
         <div class="date-row"><strong>${label}</strong><span>${timeStr}</span></div>
         <div class="warning">${icon('warning')}<span>No one is available to drive this ride.</span></div>
+        ${rideActionsHtml(entry, legKey, false)}
       </div>
     `;
   }
 
   const isMine = legData.drivers.some((d) => d.id === identity.id);
-  const driverNames = legData.drivers.map((d) => (d.id === identity.id ? 'You' : d.name)).join(' & ');
+  const driverNames = legData.drivers.map((d) => (d.id === identity.id ? 'You' : escapeHtml(d.name))).join(' &amp; ');
 
   return `
     <div class="leg-block">
@@ -613,8 +626,38 @@ function renderLeg(entry, legData, time, label) {
       ${renderChildrenSection(legData, isMine)}
       ${legData.overCapacity ? `<div class="warning">${icon('warning')}<span>Not enough seats for everyone (${legData.strandedCount} may need another ride).</span></div>` : ''}
       ${isMine ? `<button type="button" class="secondary start-route-btn" data-leg="${legKey}">${icon('route')}Start route</button>` : ''}
+      ${rideActionsHtml(entry, legKey, isMine)}
     </div>
   `;
+}
+
+// Sends one of the ride buttons' choices and redraws with the new schedule.
+async function changeRide(entry, legKey, action) {
+  const ride = `${legKey === 'there' ? 'drop off' : 'pick up'} on ${FULL_DAY_LABELS[entry.weekday]}, ${formatDateShort(entry.date)}`;
+  if (action === 'unavailable' && !window.confirm(`Can't make the ${ride}? Someone else will be picked to drive it.`)) return;
+  if (action === 'volunteer' && !window.confirm(`Drive the ${ride}?`)) return;
+  const body = {
+    unavailable: { unavailable: true },
+    available: { unavailable: false },
+    volunteer: { volunteer: true },
+  }[action];
+  const errorEl = document.getElementById('rideActionError');
+  showError(errorEl, '');
+  try {
+    const data = await api(`/api/carpools/${encodeURIComponent(code)}/dates/${entry.date}/rides/${legKey}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    carpool = data.carpool;
+    scheduleData = data.schedule;
+    renderMembers();
+    renderMainCalendar();
+    renderProblems();
+    selectDay(entry.date);
+  } catch (err) {
+    showError(errorEl, err.message);
+  }
 }
 
 function selectDay(dateKey) {
@@ -657,11 +700,16 @@ function selectDay(dateKey) {
     ${!thereHtml && !backHtml ? '<div class="riders">No riders scheduled this day.</div>' : ''}
     ${thereHtml}
     ${backHtml}
+    ${entry.locked && (thereHtml || backHtml) ? `<p class="field-help">This week's drivers are set. If you can't make your ride, tap "Can't make it" and someone else is picked.</p>` : ''}
+    <p class="error hidden" id="rideActionError"></p>
     ${myChildrenToggles}
   `;
   wireChildToggles(entry.date);
   panel.querySelectorAll('.start-route-btn').forEach((btn) => {
     btn.addEventListener('click', () => openRouteOverlay(entry, btn.dataset.leg));
+  });
+  panel.querySelectorAll('.ride-action-btn').forEach((btn) => {
+    btn.addEventListener('click', () => changeRide(entry, btn.dataset.leg, btn.dataset.rideAction));
   });
 }
 
@@ -737,13 +785,13 @@ function renderMyChildren() {
   const activeWeekdays = getActiveWeekdays();
 
   me.children.forEach((child) => {
-    const originalFirstName = child.name.split(' ')[0];
+    const originalFirstName = child.firstName;
     const row = document.createElement('div');
     row.className = 'my-child-row';
     row.innerHTML = `
       <div class="field">
         <label>Name</label>
-        <input type="text" class="my-child-name-input" value="${originalFirstName}" />
+        <input type="text" class="my-child-name-input" value="${escapeHtml(originalFirstName)}" />
       </div>
       <div class="field">
         <label>Rides needed</label>
@@ -838,6 +886,68 @@ function closeMyChildrenOverlay() {
 
 document.getElementById('closeMyChildren').addEventListener('click', closeMyChildrenOverlay);
 
+// ---- Organizer: people waiting to join, and whether joining needs approval ----
+
+function renderJoinRequests() {
+  const isOrganizer = identity.id === carpool.ownerId;
+  const requests = isOrganizer ? carpool.joinRequests || [] : [];
+  document.getElementById('joinRequestsSection').classList.toggle('hidden', requests.length === 0);
+  const badge = document.getElementById('settingsBadge');
+  badge.textContent = String(requests.length);
+  badge.classList.toggle('hidden', requests.length === 0);
+  document.getElementById('requireApprovalToggle').checked = Boolean(carpool.requireApproval);
+
+  const list = document.getElementById('joinRequestsList');
+  list.innerHTML = '';
+  requests.forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'member-row';
+    const riders = r.riders.length ? `Riders: ${r.riders.join(', ')}` : 'No riders (driving only)';
+    row.innerHTML = `
+      <span class="member-text"><strong>${escapeHtml(r.name)}</strong><span class="member-row-meta">${escapeHtml(riders)}</span></span>
+      <div class="request-actions">
+        <button type="button" data-decision="approve">Approve</button>
+        <button type="button" class="secondary" data-decision="decline">Decline</button>
+      </div>`;
+    row.querySelectorAll('[data-decision]').forEach((btn) => {
+      btn.addEventListener('click', () => answerJoinRequest(r, btn.dataset.decision));
+    });
+    list.appendChild(row);
+  });
+}
+
+async function answerJoinRequest(request, decision) {
+  if (decision === 'decline' && !window.confirm(`Decline ${request.name}'s request to join?`)) return;
+  const errorEl = document.getElementById('joinRequestsError');
+  showError(errorEl, '');
+  try {
+    await api(`/api/carpools/${encodeURIComponent(code)}/join-requests/${encodeURIComponent(request.id)}/${decision}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    await refreshCarpoolAndSchedule();
+    renderAll();
+  } catch (err) {
+    showError(errorEl, err.message);
+  }
+}
+
+document.getElementById('requireApprovalToggle').addEventListener('change', async (e) => {
+  const errorEl = document.getElementById('requireApprovalError');
+  showError(errorEl, '');
+  try {
+    carpool = await api(`/api/carpools/${encodeURIComponent(code)}/details`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requireApproval: e.target.checked }),
+    });
+  } catch (err) {
+    e.target.checked = !e.target.checked;
+    showError(errorEl, err.message);
+  }
+});
+
 function renderAll() {
   document.getElementById('carpoolName').textContent = carpool.name;
   const activityEl = document.getElementById('activitySummary');
@@ -850,6 +960,7 @@ function renderAll() {
   document.getElementById('editDetailsBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
   document.getElementById('emailEveryoneBtn').classList.toggle('hidden', identity.id !== carpool.ownerId);
   document.getElementById('organizerMenu').classList.toggle('hidden', identity.id !== carpool.ownerId);
+  renderJoinRequests();
   renderProblems();
   renderDatesStatus();
   renderCalendarHeader(document.getElementById('calendarHeader'));

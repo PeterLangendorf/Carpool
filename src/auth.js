@@ -51,7 +51,7 @@ function hasUnlinkedMembers(carpool) {
 // one). Members from before sign-in existed are claimed by verified email the
 // first time their owner signs in. Throws 404 if there's no such carpool.
 async function getMembership(req, code) {
-  let carpool = await store.getCarpool(code);
+  let carpool = await store.getCarpool(code, { timeZone: req.get('x-time-zone') });
   if (!carpool) {
     const err = new Error('Carpool not found');
     err.status = 404;
@@ -82,17 +82,25 @@ async function requireMember(req, res, next) {
   }
 }
 
-// Every carpool the signed-in user is a member of, after claiming any older
-// members of theirs by verified email.
+// Every carpool the signed-in user is a member of. Read from their own list
+// of carpool codes (see src/store.js); the first time, when there's no list
+// yet, it scans every carpool, claiming any older members of theirs by
+// verified email, and saves the list.
 async function getUserCarpools(userId) {
+  const mine = (carpools) =>
+    carpools.map((carpool) => ({ carpool, member: carpool.members.find((m) => m.userId === userId) })).filter(({ member }) => member);
+
+  const codes = await store.getUserCarpoolCodes(userId);
+  if (codes) return mine(await store.getCarpools(codes));
+
   let carpools = await store.getAllCarpools();
   if (carpools.some((c) => hasUnlinkedMembers(c) && !c.members.some((m) => m.userId === userId))) {
     const { verifiedEmails } = await getUserProfile(userId);
     carpools = await store.linkMembersByEmail(userId, verifiedEmails);
   }
-  return carpools
-    .map((carpool) => ({ carpool, member: carpool.members.find((m) => m.userId === userId) }))
-    .filter(({ member }) => member);
+  const result = mine(carpools);
+  await store.setUserCarpoolCodes(userId, result.map(({ carpool }) => carpool.code));
+  return result;
 }
 
 module.exports = { isAuthConfigured, requireUser, requireMember, getMembership, getUserProfile, getUserCarpools };

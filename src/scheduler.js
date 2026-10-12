@@ -1,4 +1,5 @@
-const { resolveActivityTimes } = require('./store');
+const { resolveActivityTimes } = require('../public/activity-times');
+const { weekdayOf } = require('./dates');
 
 /**
  * Builds a fair driving schedule for an explicit list of activity dates
@@ -23,21 +24,38 @@ const { resolveActivityTimes } = require('./store');
  * both legs would take every such date and others would never drive.
  * Each leg is filled using the same fairness rule as before: lowest
  * running drive-count so far (ties broken by longest time since last
- * drove), adding a second driver only if one person's capacity isn't
- * enough. If children need a ride on a leg but no parent can drive it, that
- * leg is recorded with noDriverAvailable: true.
+ * drove), adding more drivers only while the seats so far aren't enough. If
+ * children need a ride on a leg but no parent can drive it, that leg is
+ * recorded with noDriverAvailable: true.
+ *
+ * `history` carries on from drives already done: `counts` (rides driven per
+ * member id) and `lastDriven` (each member's latest "YYYY-MM-DD"). Without it
+ * everyone would start from zero at the first date given, so every time a
+ * date passed the whole future schedule could reshuffle. The returned
+ * `driveCounts` only count rides within `dates`.
+ *
+ * Per-date overrides (`dateOverrides[date]`), besides `excludedChildIds`:
+ * `unavailableDriverIds: { there: [ids], back: [ids] }` takes members off a
+ * ride they can't make, and `volunteers: { there: [ids], back: [ids] }` puts
+ * members on one they've offered to drive. `lockedDrives[date]` (same
+ * `{ there, back }` shape) are the drivers a date was locked to shortly
+ * before it (see store.lockUpcomingDrives). Volunteers and then locked
+ * drivers keep their rides, only as many as are needed to seat everyone;
+ * if they aren't enough, the fairest of the others are added.
  */
-function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
+function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}, history = {}, lockedDrives = {}) {
   const sortedDates = Array.from(new Set(dates)).sort();
-  const driveCount = new Map(members.map((m) => [m.id, 0]));
-  const lastDrivenIndex = new Map(members.map((m) => [m.id, -1]));
+  const startCounts = (history && history.counts) || {};
+  const startLast = (history && history.lastDriven) || {};
+  const driveCount = new Map(members.map((m) => [m.id, startCounts[m.id] || 0]));
+  const lastDriven = new Map(members.map((m) => [m.id, startLast[m.id] || '']));
   const schedule = [];
 
   const byFairness = (a, b) => {
     const countDiff = driveCount.get(a.id) - driveCount.get(b.id);
     if (countDiff !== 0) return countDiff;
-    const recencyDiff = lastDrivenIndex.get(a.id) - lastDrivenIndex.get(b.id);
-    if (recencyDiff !== 0) return recencyDiff;
+    const recency = lastDriven.get(a.id).localeCompare(lastDriven.get(b.id));
+    if (recency !== 0) return recency;
     return a.id.localeCompare(b.id);
   };
 
@@ -49,16 +67,23 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
     const sorted = candidates.slice().sort(byFairness);
     const capacityOf = (m) => m.seats;
 
+    // The fairest driver who fits everyone alone; otherwise start with the
+    // fairest and keep adding the fairest one who covers the rest (or, if
+    // nobody can, the fairest remaining) until everyone has a seat.
     let drivers;
     const soloCandidate = sorted.find((m) => capacityOf(m) >= totalChildren);
     if (soloCandidate) {
       drivers = [soloCandidate];
     } else {
-      const first = sorted[0];
-      const rest = sorted.slice(1);
-      const combinedEnough = (second) => capacityOf(first) + capacityOf(second) >= totalChildren;
-      const second = rest.find(combinedEnough) || rest[0];
-      drivers = second ? [first, second] : [first];
+      drivers = [sorted[0]];
+      let rest = sorted.slice(1);
+      let capacity = capacityOf(sorted[0]);
+      while (capacity < totalChildren && rest.length) {
+        const next = rest.find((m) => capacity + capacityOf(m) >= totalChildren) || rest[0];
+        drivers.push(next);
+        capacity += capacityOf(next);
+        rest = rest.filter((m) => m !== next);
+      }
     }
 
     const totalCapacity = drivers.reduce((sum, d) => sum + capacityOf(d), 0);
@@ -67,10 +92,31 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
     return { drivers, noDriverAvailable: false, overCapacity, strandedCount };
   }
 
-  function markDriven(members, index) {
+  // Keeps `fixed` drivers (in order) until everyone has a seat, then tops up
+  // from `candidates` by fairness if they fall short.
+  function fillLeg(fixed, candidates, totalChildren) {
+    if (totalChildren === 0) return pickDrivers([], 0);
+    const kept = [];
+    let capacity = 0;
+    fixed.forEach((m) => {
+      if (capacity >= totalChildren) return;
+      kept.push(m);
+      capacity += m.seats;
+    });
+    if (!kept.length) return pickDrivers(candidates, totalChildren);
+    if (capacity >= totalChildren) return { drivers: kept, noDriverAvailable: false, overCapacity: false, strandedCount: 0 };
+    const extra = pickDrivers(candidates.filter((m) => !kept.includes(m)), totalChildren - capacity);
+    const drivers = [...kept, ...extra.drivers];
+    const stranded = Math.max(0, totalChildren - drivers.reduce((sum, d) => sum + d.seats, 0));
+    return { drivers, noDriverAvailable: false, overCapacity: stranded > 0, strandedCount: stranded };
+  }
+
+  const memberById = new Map(members.map((m) => [m.id, m]));
+
+  function markDriven(members, dateStr) {
     members.forEach((m) => {
       driveCount.set(m.id, driveCount.get(m.id) + 1);
-      lastDrivenIndex.set(m.id, index);
+      lastDriven.set(m.id, dateStr);
     });
   }
 
@@ -84,8 +130,8 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
     };
   }
 
-  sortedDates.forEach((dateStr, i) => {
-    const weekday = new Date(dateStr + 'T00:00:00').getDay();
+  sortedDates.forEach((dateStr) => {
+    const weekday = weekdayOf(dateStr);
     const excludedChildIds = new Set(
       (dateOverrides[dateStr] && dateOverrides[dateStr].excludedChildIds) || []
     );
@@ -101,13 +147,34 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
       });
     });
 
-    const thereEligible = members.filter((m) => (m.canDriveThereDays || []).includes(weekday));
-    const backEligible = members.filter((m) => (m.canDriveBackDays || []).includes(weekday));
+    const override = dateOverrides[dateStr] || {};
+    const unavailable = {
+      there: new Set((override.unavailableDriverIds && override.unavailableDriverIds.there) || []),
+      back: new Set((override.unavailableDriverIds && override.unavailableDriverIds.back) || []),
+    };
+    // Volunteers first, then the drivers the date was locked to.
+    const fixedFor = (leg) => {
+      const ids = [
+        ...((override.volunteers && override.volunteers[leg]) || []),
+        ...((lockedDrives[dateStr] && lockedDrives[dateStr][leg]) || []),
+      ];
+      const out = [];
+      ids.forEach((id) => {
+        const m = memberById.get(id);
+        if (m && m.seats > 0 && !unavailable[leg].has(id) && !out.includes(m)) out.push(m);
+      });
+      return out;
+    };
+    const thereFixed = fixedFor('there');
+    const backFixed = fixedFor('back');
 
-    // A single driver who can cover both legs solo, if any.
-    const bothEligible = members.filter(
-      (m) => (m.canDriveThereDays || []).includes(weekday) && (m.canDriveBackDays || []).includes(weekday)
-    );
+    const canDrive = (m, leg) => (m[leg === 'there' ? 'canDriveThereDays' : 'canDriveBackDays'] || []).includes(weekday) && !unavailable[leg].has(m.id);
+    const thereEligible = members.filter((m) => canDrive(m, 'there'));
+    const backEligible = members.filter((m) => canDrive(m, 'back'));
+
+    // A single driver who can cover both legs solo, if any (not when anyone
+    // is already set for either ride).
+    const bothEligible = thereFixed.length || backFixed.length ? [] : members.filter((m) => canDrive(m, 'there') && canDrive(m, 'back'));
     const soloBoth = bothEligible
       .slice()
       .sort(byFairness)
@@ -117,11 +184,11 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
     // drives, as it would for real), remembering the counts beforehand so
     // this can be undone if the solo driver turns out to be the fairer pick.
     const countsBefore = new Map(driveCount);
-    const lastBefore = new Map(lastDrivenIndex);
-    let thereResult = pickDrivers(thereEligible, thereChildren.length);
-    if (thereResult.drivers.length) markDriven(thereResult.drivers, i);
-    let backResult = pickDrivers(backEligible, backChildren.length);
-    if (backResult.drivers.length) markDriven(backResult.drivers, i);
+    const lastBefore = new Map(lastDriven);
+    let thereResult = fillLeg(thereFixed, thereEligible, thereChildren.length);
+    if (thereResult.drivers.length) markDriven(thereResult.drivers, dateStr);
+    let backResult = fillLeg(backFixed, backEligible, backChildren.length);
+    if (backResult.drivers.length) markDriven(backResult.drivers, dateStr);
 
     if (soloBoth && (thereChildren.length > 0 || backChildren.length > 0)) {
       const splitDrivers = [...thereResult.drivers, ...backResult.drivers];
@@ -133,7 +200,7 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
 
       if (splitFallsShort || countsBefore.get(soloBoth.id) <= splitAverage) {
         countsBefore.forEach((v, k) => driveCount.set(k, v));
-        lastBefore.forEach((v, k) => lastDrivenIndex.set(k, v));
+        lastBefore.forEach((v, k) => lastDriven.set(k, v));
         const solo = (count) =>
           count ? { drivers: [soloBoth], noDriverAvailable: false, overCapacity: false, strandedCount: 0 } : pickDrivers([], 0);
         thereResult = solo(thereChildren.length);
@@ -141,7 +208,7 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
         const legsDriven = [];
         if (thereChildren.length) legsDriven.push(soloBoth);
         if (backChildren.length) legsDriven.push(soloBoth);
-        markDriven(legsDriven, i);
+        markDriven(legsDriven, dateStr);
       }
     }
 
@@ -157,7 +224,7 @@ function buildSchedule(members, dates, dateOverrides = {}, activityTimes = {}) {
     });
   });
 
-  const driveCounts = Object.fromEntries(driveCount);
+  const driveCounts = Object.fromEntries(members.map((m) => [m.id, driveCount.get(m.id) - (startCounts[m.id] || 0)]));
   return { schedule, driveCounts };
 }
 

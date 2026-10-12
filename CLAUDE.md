@@ -22,7 +22,13 @@ computes a fair driving schedule for each activity date.
 - Sign-in needs `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` (from the Clerk dashboard) in
   `.env` locally and in the Netlify site's environment variables. Without them every carpool
   route answers 503 and the pages show "Sign-in unavailable".
-- No test suite and no lint config currently exist in this repo.
+- `npm test` runs the tests in `test/` (Node's built-in runner, no extra dependencies). They
+  swap Netlify Blobs for an in-memory fake (`test/fake-blobs.js`) with real ETag behaviour;
+  `test/api.test.js` also stubs Clerk so the real Express routes run, signed in as whoever
+  the `X-Test-User` header names.
+- `npm run lint` runs ESLint (`eslint.config.js`: recommended rules; Node globals for the
+  server, browser-script globals for `public/`, which share `auth`, `ActivityTimes` and
+  `CAR_SVG` across files).
 
 ## Architecture
 
@@ -51,23 +57,29 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   (`normalizeMembers`, `normalizeActivityTimes`, `getEffectiveOwnerId`, `getScheduleResult`).
 - `src/email.js` (builds/sends emails via Resend) and `src/notify.js` (emails a whole
   carpool: the owner's "Email everyone" update and the monthly schedule).
-- `src/store.js` — the entire persistence layer, backed by Netlify Blobs (a single JSON blob
-  holding the whole `{ carpools: {...} }` document, read-modify-written on every call — no
-  in-memory cache, no transactions/locking, so concurrent writes are last-write-wins). Owns
+- `src/store.js` — the entire persistence layer, backed by Netlify Blobs: one JSON blob per
+  carpool (`carpools/<CODE>`), no in-memory cache. Every change goes through
+  `updateCarpool(code, change)`, which reads the carpool, runs `change` on it and saves with an
+  ETag check (`onlyIfMatch`); if someone else saved that carpool in between it re-reads and
+  re-runs `change`, so simultaneous saves never silently overwrite each other. `change` may
+  therefore run more than once — it must only modify the carpool it's given (throwing aborts).
+  Creates use `onlyIfNew`; a carpool whose last member leaves becomes a `{ deleted: true }`
+  tombstone (deletes can't be conditional). Everything used to be one shared `db` blob;
+  `migrateLegacyDb` copies it out once (the old blob stays as a backup). Owns
   carpool codes, members, children, activity dates/times, recurrence rules, and per-date child
   exclusions. All functions are async. Reads are **strongly consistent** (`getDbStore`): with
   Blobs' default eventual consistency, a write could take up to a minute to reach reads in
-  other invocations — a just-created carpool's dashboard said "Carpool not found", and a stale
-  read-modify-write could undo someone else's change. Strong reads need the "uncached edge
+  other invocations — a just-created carpool's dashboard said "Carpool not found", and stale
+  reads would keep failing the ETag check. Strong reads need the "uncached edge
   URL": native functions get it automatically, but the API runs in Lambda compatibility mode
   where `connectLambda()` drops it, so `netlify/functions/api.js` also passes each event to
   `store.useLambdaBlobsContext`, which reads `url_uncached` from it (falling back to eventual
   reads if it's ever missing). Store functions whose result needs to reflect data they just
   wrote still return the mutated carpool directly (e.g. `addChild`/`updateChild`/
   `removeChild`/`setChildExclusion` return `{ ..., carpool }`, and `createCarpoolWithOwner`
-  builds the carpool and its owner in one load/save) rather than re-fetching with
+  builds the carpool and its owner in one write) rather than re-fetching with
   `getCarpool()` — keep that pattern for new mutations.
-- `src/scheduler.js` — pure function `buildSchedule(members, dates, dateOverrides, activityTimes)`
+- `src/scheduler.js` — pure function `buildSchedule(members, dates, dateOverrides, activityTimes, history)`
   that assigns drivers. No I/O; safe to reason about/test in isolation.
 - `public/auth.js` — loaded by every page before its own script: fetches the Clerk
   publishable key from `GET /api/config`, loads Clerk's browser scripts from the key's
@@ -93,10 +105,11 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   get a "Carpools" button there that opens their carpools as tickets (`GET
   /api/my-carpools`, which also returns weekdays and the next ride). Joining by code calls
   `GET .../preview` (name + dates/times only); people already in the carpool go straight to
-  the dashboard.
+  the dashboard, and people waiting for approval to the `join-pending` screen.
 - `public/dashboard.html` + `public/dashboard.js` — a carpool's page: navy band, then tabs
-  (`showTab`): Schedule (calendar, day details, per-date exclusions), People (members with
-  drive counts, your riders/addresses) and Settings (organizer tools, copy code, leave).
+  (`showTab`): Schedule (calendar, day details with "Can't make it" / "I'll drive it" on each
+  ride, per-date exclusions), People (members with drive counts, your riders/addresses) and
+  Settings (join requests, organizer tools, copy code, leave).
 
 ### UI conventions
 
@@ -115,9 +128,13 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   `canDriveThereDays` / `canDriveBackDays`; a child's ride need is `needsRideThereDays` /
   `needsRideBackDays` — all as arrays of weekday numbers (0=Sunday..6=Saturday), not dates.
 - **Activity times resolve most-specific-wins**: `perDate` overrides `perWeekday` overrides
-  `uniform`. This resolution logic is duplicated in `src/store.js` (`resolveActivityTimes`,
-  used by the backend) and `public/dashboard.js` (`resolveTimes`, used for frontend preview) —
-  keep them in sync if you change the precedence rules.
+  `uniform`. The rule lives once, in `public/activity-times.js`: the server `require`s it and
+  the pages load it as a script (`window.ActivityTimes`, aliased `resolveTimes`).
+- **"Today" is the carpool's own date**: `carpool.timeZone` (IANA name) comes from the
+  creator's browser, or for older carpools from whoever opens it first (`auth.fetch` sends an
+  `X-Time-Zone` header; `store.getCarpool(code, { timeZone })` adopts it if unset). Use
+  `todayKey(carpool.timeZone)` from `src/dates.js` for anything about upcoming dates — never
+  `new Date().toISOString()`, which is UTC (tomorrow, during a US evening).
 - **Recurrence is materialized, not computed on the fly**: `store.getCarpool()` calls
   `materializeRecurrence()` on every read, which lazily expands a recurrence rule (weekdays +
   start/end date) into concrete entries in `activityDates`, rolling a ~12-month window forward
@@ -128,11 +145,45 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   `needsRideDays`, a flat `date -> "HH:MM"` map) into the current two-leg shape at read time.
   The stored blob itself is never migrated — old and new shapes coexist in it.
 - **Fairness scheduling**: `buildSchedule` fills each leg independently by lowest running
-  drive-count (ties broken by longest time since last drove), adding a second driver only if
-  capacity requires it. It swaps in one driver for both legs of a date only when that driver's
+  drive-count (ties broken by longest time since last drove), adding more drivers only while
+  the seats aren't enough. It swaps in one driver for both legs of a date only when that driver's
   count is no higher than the average of the split's drivers (or the split falls short on
   drivers/seats) — an unconditional solo preference let one always-available member take
   every such date while others never drove.
+- **Drive history keeps the schedule stable**: once a date passes, who drove it is saved in
+  `carpool.driveHistory.dates` (`store.recordPastDrives`, run on every read like
+  materialization; recording starts at `driveHistory.since`, with no back-filling). The
+  schedule (`normalize.computeSchedule`) carries on from those counts, so it comes out the
+  same as before the date passed. Without it, counts restarted at zero every day and the
+  future reshuffled whenever a date went by. A member who joins later gets `driveCredit` (the
+  members' average count so far) so they don't drive every ride until they catch up.
+  `driveCounts` in the API only count upcoming rides.
+- **The coming week is locked in**: `store.lockUpcomingDrives` (on every read) saves the
+  drivers of each date in the next 7 days in `carpool.lockedDrives[date] = { there, back }`.
+  `buildSchedule` keeps locked drivers (as many as are needed to seat everyone) and only
+  tops up by fairness, so a new family, changed availability or an absent rider can't
+  reshuffle rides that are days away. Anyone added is locked in too; locks for past dates
+  are dropped once recorded in the history.
+- **Swapping rides is per-date overrides**: `dateOverrides[date].unavailableDriverIds` and
+  `.volunteers` (each `{ there: [ids], back: [ids] }`), set by `PUT
+  .../dates/:date/rides/:leg` (`store.setRideOverride`) for the requester only. "Can't make
+  it" takes you off that ride (and out of its lock), and the fairest other driver is picked;
+  "I'll drive it" puts you first on it. Anyone newly put on a locked ride is emailed.
+  `dateOverrides[date]` always keeps `excludedChildIds` (code iterates it).
+- **Joining can need the organizer's approval**: `carpool.requireApproval` (on for new
+  carpools, off for ones from before it existed; toggled in Settings). Joining then adds the
+  member to `carpool.joinRequests` instead of `members` (`POST .../members` answers 202
+  `{ pending: true }` and emails the organizer); the organizer answers with `POST
+  .../join-requests/:memberId/approve|decline`. Only the organizer gets `joinRequests` from
+  the API.
+- **Each user has a list of their carpools**: `users/<userId>` blobs (`{ codes, complete }`)
+  so `GET /api/my-carpools` reads only that user's carpools. The first time (no complete
+  list), `auth.getUserCarpools` scans every carpool, claims legacy members by email, and
+  saves the list. Codes are added before joining/creating and removed after leaving, so the
+  list never misses one; extra codes are harmless because readers check membership.
+- **Riders store their name parts**: `firstName` and `lastNameOverride` (blank = the
+  parent's last name) alongside the composed `name`. Older riders only have `name`;
+  `normalize.childNameParts` splits it.
 - **Addresses are per member, chosen per ride**: a member has `addresses: [{id, address}]`
   (only required if they have riders) and `rideAddresses: { there: {weekday: addressId},
   back: {...} }` saying which address each ride starts/ends at (falls back to the first
@@ -150,8 +201,9 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   the rest of the month (stops in route order with Apple Maps links, built from the same
   schedule + ride-address logic as the dashboard's route overlay). Sent on create and join
   via Resend's HTTP API, only when the `RESEND_API_KEY` and `EMAIL_FROM` env vars are set
-  (otherwise a silent no-op).
-  Every email has an unsubscribe link (`/api/unsubscribe?c=&m=&t=`, plus RFC 8058
+  (otherwise a silent no-op). Short one-off notices (`sendNotice`: a join request for the
+  organizer, a ride handed to someone) are plain text plus a link.
+  Every summary email has an unsubscribe link (`/api/unsubscribe?c=&m=&t=`, plus RFC 8058
   one-click headers) authorized by a secret per-member `unsubscribeToken`; GET only shows a
   confirm button (link scanners prefetch), POST sets `member.emailOptOut`, which update and
   monthly emails skip. Emails, tokens and Clerk user IDs are stripped from every API response by
@@ -165,3 +217,14 @@ There is no long-running server process — see `netlify.toml` for the redirect 
   a carpool (addresses, riders, schedule); the unsubscribe routes are the only unauthenticated
   ones besides `/api/config`. `code` uniquely identifies a carpool; `store.normalizeCode`
   strips ambiguous characters (I/O/0/1 excluded from generated codes).
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.

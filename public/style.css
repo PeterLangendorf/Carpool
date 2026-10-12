@@ -1898,6 +1898,41 @@ button.tab:active {
   min-height: 46px;
 }
 
+/* "Can't make it" / "I'll drive it" under a ride. */
+.ride-action-btn {
+  min-height: 40px;
+  padding: 8px 12px;
+  font-size: 0.92rem;
+}
+
+/* Organizer: Approve / Decline under a join request. */
+.request-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.request-actions button {
+  min-height: 40px;
+  padding: 8px 12px;
+}
+
+/* Count of join requests on the Settings tab. */
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--sun);
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
 .warning {
   display: flex;
   align-items: flex-start;

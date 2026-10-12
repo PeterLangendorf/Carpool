@@ -5,7 +5,9 @@
   "main": "netlify/functions/api.js",
   "scripts": {
     "start": "netlify dev",
-    "local": "node --env-file-if-exists=.env local-server.js"
+    "local": "node --env-file-if-exists=.env local-server.js",
+    "test": "node --test \"test/*.test.js\"",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@clerk/express": "^2.1.78",
@@ -14,6 +16,9 @@
     "serverless-http": "^4.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
     "netlify-cli": "^27.8.0"
   }
 }

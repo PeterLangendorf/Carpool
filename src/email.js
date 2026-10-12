@@ -3,6 +3,8 @@
 // set in the Netlify site's environment variables, so local dev and
 // unconfigured deploys keep working without an email provider.
 
+const { todayKey } = require('./dates');
+
 const FULL_DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 function escapeHtml(value) {
@@ -98,7 +100,7 @@ function rideStops(carpool, members, driver, entry, leg) {
 // Every ride `member` is scheduled to drive from today to the end of the
 // current month.
 function drivesThisMonth(carpool, member, schedule, members) {
-  const monthKey = new Date().toISOString().slice(0, 7);
+  const monthKey = todayKey(carpool.timeZone).slice(0, 7);
   const rows = [];
   (schedule || [])
     .filter((e) => e.date.startsWith(monthKey))
@@ -116,14 +118,15 @@ function drivesThisMonth(carpool, member, schedule, members) {
   return rows;
 }
 
-function monthName() {
-  return new Date().toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+// The current month's name where the carpool is.
+function monthName(carpool) {
+  return new Date(todayKey(carpool.timeZone) + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
 }
 
-function drivesHtml(rows) {
-  const heading = `<h3 style="font-size:16px;margin:24px 0 8px">Your drives for the rest of ${monthName()}</h3>`;
+function drivesHtml(rows, carpool) {
+  const heading = `<h3 style="font-size:16px;margin:24px 0 8px">Your drives for the rest of ${monthName(carpool)}</h3>`;
   if (!rows.length) {
-    return `${heading}<p style="font-size:14px;color:#646a7b">You're not scheduled to drive for the rest of ${monthName()}.</p>`;
+    return `${heading}<p style="font-size:14px;color:#646a7b">You're not scheduled to drive for the rest of ${monthName(carpool)}.</p>`;
   }
   const cell = 'padding:8px;border-bottom:1px solid #e3ded3;vertical-align:top;font-size:14px';
   const head = 'padding:8px;border-bottom:2px solid #e3ded3;text-align:left;font-size:12px;color:#646a7b';
@@ -148,10 +151,10 @@ function drivesHtml(rows) {
       <p style="font-size:12px;color:#646a7b">This is the schedule as of today. It can change as people join or update their availability, so check the app for the latest.</p>`;
 }
 
-function drivesText(rows) {
-  if (!rows.length) return [`You're not scheduled to drive for the rest of ${monthName()}.`];
+function drivesText(rows, carpool) {
+  if (!rows.length) return [`You're not scheduled to drive for the rest of ${monthName(carpool)}.`];
   return [
-    `Your drives for the rest of ${monthName()}:`,
+    `Your drives for the rest of ${monthName(carpool)}:`,
     ...rows.map(
       (r) =>
         `- ${formatDate(r.date)}, ${r.ride} at ${formatTime(r.time)}: ` +
@@ -194,12 +197,12 @@ function buildSummary(carpool, member, siteUrl, scheduleInfo, options = {}) {
   const subject = {
     welcome: `Your carpool: ${carpool.name} (code ${carpool.code})`,
     update: `Update from ${fromName}: ${carpool.name}`,
-    monthly: `Your ${monthName()} carpool schedule: ${carpool.name}`,
+    monthly: `Your ${monthName(carpool)} carpool schedule: ${carpool.name}`,
   }[kind];
   const intro = {
     welcome: `Here's a summary of your carpool "${carpool.name}".`,
     update: `${fromName} sent an update about your carpool "${carpool.name}".`,
-    monthly: `Here's your ${monthName()} schedule for your carpool "${carpool.name}".`,
+    monthly: `Here's your ${monthName(carpool)} schedule for your carpool "${carpool.name}".`,
   }[kind];
   const footer = `You're getting this because you're in the "${carpool.name}" carpool.`;
 
@@ -211,7 +214,7 @@ function buildSummary(carpool, member, siteUrl, scheduleInfo, options = {}) {
     '',
     ...filled.map(([k, v]) => `${k}: ${v}`),
     '',
-    ...(drives ? [...drivesText(drives), ''] : []),
+    ...(drives ? [...drivesText(drives, carpool), ''] : []),
     `Share the join code ${carpool.code} with others in your carpool, or send them this link:`,
     link,
     '',
@@ -237,7 +240,7 @@ function buildSummary(carpool, member, siteUrl, scheduleInfo, options = {}) {
           )
           .join('')}
       </table>
-      ${drives ? drivesHtml(drives) : ''}
+      ${drives ? drivesHtml(drives, carpool) : ''}
       <p>Share the join code with others in your carpool, or send them this link:<br><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p>
       <p style="font-size:12px;color:#646a7b;border-top:1px solid #e3ded3;padding-top:12px;margin-top:20px">
         ${escapeHtml(footer)}
@@ -298,6 +301,27 @@ async function sendCarpoolSummary(to, carpool, member, siteUrl, scheduleInfo) {
   }
 }
 
+// A short notice to one person (a join request for the organizer, a ride
+// handed to someone): a few paragraphs and a link to the carpool. Resolves to
+// true if accepted for delivery; never throws.
+async function sendNotice(to, subject, paragraphs, link) {
+  if (!to || !isEmailConfigured()) return false;
+  const text = [...paragraphs, link].join('\n\n');
+  const html = `
+    <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#15203b;background:#ffffff;padding:20px;border-radius:12px;max-width:560px">
+      ${paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join('')}
+      <p><a href="${escapeHtml(link)}" style="color:#174597;font-weight:600">Open the carpool</a></p>
+    </div>
+  `;
+  try {
+    await resendRequest('/emails', { from: process.env.EMAIL_FROM, to: [to], subject, text, html });
+    return true;
+  } catch (err) {
+    console.error('Notice email failed:', err);
+    return false;
+  }
+}
+
 // Sends many emails via Resend's batch endpoint (up to 100 per request).
 // Returns how many were accepted; logs and skips any batch that fails.
 const BATCH_SIZE = 100;
@@ -316,4 +340,4 @@ async function sendEmails(emails) {
   return sent;
 }
 
-module.exports = { sendCarpoolSummary, buildEmail, sendEmails, isEmailConfigured };
+module.exports = { sendCarpoolSummary, sendNotice, buildEmail, sendEmails, isEmailConfigured, formatDate };

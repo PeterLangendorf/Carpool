@@ -96,6 +96,18 @@
     </form>
   </section>
 
+  <!-- JOIN: waiting for the organizer to approve (carpools that require approval) -->
+  <section class="screen hidden" data-screen="join-pending">
+    <div>
+      <h1>Request sent</h1>
+      <p class="subtitle" id="joinPendingText">The organizer needs to approve you before you can see the carpool.</p>
+    </div>
+    <div class="card">
+      <p class="subtitle">Once they do, you'll find it under Carpools on the home screen.</p>
+      <button type="button" class="secondary" data-back="home">Back to home</button>
+    </div>
+  </section>
+
   <!-- JOIN: step 2a, your name (people already in the carpool skip to the dashboard) -->
   <section class="screen hidden" data-screen="join-new-name">
     <div>
@@ -551,6 +563,7 @@
 </div>
 
 <script src="/auth.js"></script>
+<script src="/activity-times.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
